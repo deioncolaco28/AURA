@@ -1,3 +1,5 @@
 python-dotenv
 pydantic
 pytest
+SpeechRecognition
+pyttsx3
