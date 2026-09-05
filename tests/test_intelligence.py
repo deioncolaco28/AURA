@@ -75,3 +75,16 @@ def test_planner_creates_task():
 
     assert isinstance(task, Task)
     assert task.goal == "Open Notepad"
+
+
+def test_planner_adds_initial_action():
+    intent = Intent(
+        raw_text="Open Notepad",
+        goal="Open Notepad",
+    )
+
+    planner = Planner()
+    task = planner.create_task(intent)
+
+    assert task.total_actions == 1
+    assert task.actions[0].action_type == ActionType.SPEAK
