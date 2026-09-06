@@ -3,3 +3,5 @@ pydantic
 pytest
 SpeechRecognition
 pyttsx3
+PyAudio
+PyAutoGUI
