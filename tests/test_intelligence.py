@@ -77,7 +77,7 @@ def test_planner_creates_task():
     assert task.goal == "Open Notepad"
 
 
-def test_planner_adds_initial_action():
+def test_planner_creates_launch_application_action():
     intent = Intent(
         raw_text="Open Notepad",
         goal="Open Notepad",
@@ -87,4 +87,8 @@ def test_planner_adds_initial_action():
     task = planner.create_task(intent)
 
     assert task.total_actions == 1
-    assert task.actions[0].action_type == ActionType.SPEAK
+    assert (
+        task.actions[0].action_type
+        == ActionType.LAUNCH_APPLICATION
+    )
+    assert task.actions[0].target == "notepad"

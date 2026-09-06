@@ -8,7 +8,7 @@ class Planner:
     """Converts an interpreted intent into a structured task."""
 
     def create_task(self, intent: Intent) -> Task:
-        """Create a task and generate initial actions."""
+        """Create a task and generate actions."""
 
         task = Task(
             goal=intent.goal,
@@ -28,9 +28,10 @@ class Planner:
         self,
         intent: Intent,
     ) -> list[Action]:
-        """Generate actions for a supported intent."""
+        """Generate actions for supported intents."""
 
-        goal = intent.goal
+        goal = intent.goal.strip()
+        normalized = goal.lower()
 
         if intent.mode == AssistantMode.SHOW_ME_HOW:
             return [
@@ -40,9 +41,27 @@ class Planner:
                 )
             ]
 
+        if normalized == "open notepad":
+            return [
+                Action(
+                    action_type=ActionType.LAUNCH_APPLICATION,
+                    target="notepad",
+                    description="Open Notepad",
+                )
+            ]
+
+        if normalized == "open calculator":
+            return [
+                Action(
+                    action_type=ActionType.LAUNCH_APPLICATION,
+                    target="calc",
+                    description="Open Calculator",
+                )
+            ]
+
         return [
             Action(
                 action_type=ActionType.SPEAK,
-                value=f"I will help you {goal}.",
+                value=f"I do not know how to perform {goal} yet.",
             )
         ]
