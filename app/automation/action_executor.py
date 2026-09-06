@@ -1,3 +1,5 @@
+import time
+
 from app.automation.controller import ComputerController
 from app.intelligence.action import Action, ActionType
 
@@ -5,8 +7,13 @@ from app.intelligence.action import Action, ActionType
 class ActionExecutor:
     """Executes validated AURA actions."""
 
-    def __init__(self, controller: ComputerController | None = None):
-        self.controller = controller or ComputerController()
+    def __init__(
+        self,
+        controller: ComputerController | None = None,
+    ):
+        self.controller = (
+            controller or ComputerController()
+        )
 
     def execute(self, action: Action) -> None:
         """Execute a single action."""
@@ -44,6 +51,13 @@ class ActionExecutor:
 
         self.controller.launch_application(
             action.target
+        )
+
+        time.sleep(
+            action.parameters.get(
+                "startup_wait",
+                1.0,
+            )
         )
 
     def _click(self, action: Action) -> None:

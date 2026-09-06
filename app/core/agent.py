@@ -1,11 +1,17 @@
+import time
+
 from app.automation.action_executor import ActionExecutor
 from app.intelligence.action import ActionType
 from app.intelligence.intent_parser import IntentParser
 from app.intelligence.planner import Planner
+from app.verification.application_verifier import (
+    ApplicationVerifier,
+)
 from app.voice.voice_manager import VoiceManager
 
+
 class Agent:
-    """Coordinates AURA's perception, planning, and execution."""
+    """Coordinates AURA's perception, planning, execution, and verification."""
 
     def __init__(
         self,
@@ -13,14 +19,25 @@ class Agent:
         intent_parser: IntentParser | None = None,
         planner: Planner | None = None,
         action_executor: ActionExecutor | None = None,
+        application_verifier: ApplicationVerifier | None = None,
     ):
         self.voice_manager = voice_manager
+
         self.intent_parser = (
             intent_parser or IntentParser()
         )
-        self.planner = planner or Planner()
+
+        self.planner = (
+            planner or Planner()
+        )
+
         self.action_executor = (
             action_executor or ActionExecutor()
+        )
+
+        self.application_verifier = (
+            application_verifier
+            or ApplicationVerifier()
         )
 
     def process_text(self, text: str) -> None:
@@ -56,14 +73,77 @@ class Agent:
                 )
                 continue
 
-            self.action_executor.execute(action)
+            try:
+                self.action_executor.execute(action)
+
+                self._verify_action(action)
+
+            except Exception as error:
+                print(
+                    f"Action failed: {error}"
+                )
+
+                self.voice_manager.speak(
+                    "I could not complete that action."
+                )
+
+                return
 
         self.voice_manager.speak(
             "Task completed."
         )
 
+    def _verify_action(self, action) -> None:
+        """Verify an executed action with bounded retries."""
+
+        verification = action.verification
+
+        if not verification:
+            return
+
+        verification_type = verification.get("type")
+
+        if verification_type == "APPLICATION_RUNNING":
+            process = verification.get("process")
+
+            max_attempts = verification.get(
+                "max_attempts",
+                3,
+            )
+
+            retry_delay = verification.get(
+                "retry_delay",
+                0.5,
+            )
+
+            for attempt in range(
+                1,
+                max_attempts + 1,
+            ):
+                result = self.application_verifier.verify(
+                    process
+                )
+
+                print(
+                    f"Verification attempt "
+                    f"{attempt}/{max_attempts}: "
+                    f"{result.message}"
+                )
+
+                if result.success:
+                    return
+
+                if attempt < max_attempts:
+                    time.sleep(retry_delay)
+
+            raise RuntimeError(
+                f"Action verification failed after "
+                f"{max_attempts} attempts: "
+                f"{result.message}"
+            )
+
     def run_once(self) -> None:
-        """Listen for and process one voice request."""
+        """Listen for and process one user request."""
 
         text = self.voice_manager.listen()
 

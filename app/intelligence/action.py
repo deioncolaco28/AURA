@@ -25,6 +25,12 @@ class Action:
     target: str | None = None
     value: Any = None
 
-    parameters: dict[str, Any] = field(default_factory=dict)
+    parameters: dict[str, Any] = field(
+        default_factory=dict
+    )
 
     description: str | None = None
+
+    verification: dict[str, Any] = field(
+        default_factory=dict
+    )

@@ -47,6 +47,15 @@ class Planner:
                     action_type=ActionType.LAUNCH_APPLICATION,
                     target="notepad",
                     description="Open Notepad",
+                    parameters={
+                        "startup_wait": 1.0,
+                    },
+                    verification={
+                        "type": "APPLICATION_RUNNING",
+                        "process": "notepad.exe",
+                        "max_attempts": 3,
+                        "retry_delay": 0.5,
+                    },
                 )
             ]
 
@@ -56,6 +65,9 @@ class Planner:
                     action_type=ActionType.LAUNCH_APPLICATION,
                     target="calc",
                     description="Open Calculator",
+                    parameters={
+                        "startup_wait": 1.0,
+                    },
                 )
             ]
 
