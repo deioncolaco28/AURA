@@ -41,6 +41,31 @@ class Planner:
                 )
             ]
 
+        # Multi-step Notepad task
+        if normalized == "open notepad and type hello world":
+            return [
+                Action(
+                    action_type=ActionType.LAUNCH_APPLICATION,
+                    target="notepad",
+                    description="Open Notepad",
+                    parameters={
+                        "startup_wait": 1.0,
+                    },
+                    verification={
+                        "type": "APPLICATION_RUNNING",
+                        "process": "notepad.exe",
+                        "max_attempts": 3,
+                        "retry_delay": 0.5,
+                    },
+                ),
+                Action(
+                    action_type=ActionType.TYPE_TEXT,
+                    value="Hello World",
+                    description="Type Hello World",
+                ),
+            ]
+
+        # Single-step Notepad task
         if normalized == "open notepad":
             return [
                 Action(
@@ -59,6 +84,7 @@ class Planner:
                 )
             ]
 
+        # Single-step Calculator task
         if normalized == "open calculator":
             return [
                 Action(
@@ -71,6 +97,7 @@ class Planner:
                 )
             ]
 
+        # Unsupported task
         return [
             Action(
                 action_type=ActionType.SPEAK,

@@ -39,6 +39,7 @@ def test_agent_process_text():
         "Task completed."
     )
 
+
 def test_agent_retries_failed_verification():
     voice_manager = Mock(spec=VoiceManager)
     action_executor = Mock(spec=ActionExecutor)
@@ -74,6 +75,7 @@ def test_agent_retries_failed_verification():
         "Task completed."
     )
 
+
 def test_agent_handles_verification_failure():
     voice_manager = Mock(spec=VoiceManager)
     action_executor = Mock(spec=ActionExecutor)
@@ -99,4 +101,38 @@ def test_agent_handles_verification_failure():
 
     voice_manager.speak.assert_called_with(
         "I could not complete that action."
+    )
+
+
+def test_agent_processes_multi_step_task():
+    voice_manager = Mock(spec=VoiceManager)
+    action_executor = Mock(spec=ActionExecutor)
+    application_verifier = Mock(spec=ApplicationVerifier)
+
+    application_verifier.verify.return_value = (
+        VerificationResult(
+            success=True,
+            message="notepad.exe is running.",
+        )
+    )
+
+    agent = Agent(
+        voice_manager=voice_manager,
+        planner=Planner(),
+        action_executor=action_executor,
+        application_verifier=application_verifier,
+    )
+
+    agent.process_text(
+        "Open Notepad and type Hello World"
+    )
+
+    assert action_executor.execute.call_count == 2
+
+    assert (
+        application_verifier.verify.call_count == 1
+    )
+
+    voice_manager.speak.assert_called_with(
+        "Task completed."
     )

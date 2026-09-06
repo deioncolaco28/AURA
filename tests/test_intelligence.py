@@ -92,3 +92,28 @@ def test_planner_creates_launch_application_action():
         == ActionType.LAUNCH_APPLICATION
     )
     assert task.actions[0].target == "notepad"
+
+
+def test_planner_creates_multi_step_notepad_task():
+    intent = Intent(
+        raw_text="Open Notepad and type Hello World",
+        goal="Open Notepad and type Hello World",
+    )
+
+    planner = Planner()
+
+    task = planner.create_task(intent)
+
+    assert task.total_actions == 2
+
+    assert (
+        task.actions[0].action_type
+        == ActionType.LAUNCH_APPLICATION
+    )
+
+    assert (
+        task.actions[1].action_type
+        == ActionType.TYPE_TEXT
+    )
+
+    assert task.actions[1].value == "Hello World"
