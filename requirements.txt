@@ -5,3 +5,5 @@ SpeechRecognition
 pyttsx3
 PyAudio
 PyAutoGUI
+Pillow
+pytesseract
