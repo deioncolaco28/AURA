@@ -1,18 +1,25 @@
 import time
 
 from app.automation.action_executor import ActionExecutor
+from app.automation.perception_executor import PerceptionExecutor
+from app.config.constants import AssistantMode
 from app.intelligence.action import ActionType
 from app.intelligence.intent_parser import IntentParser
 from app.intelligence.planner import Planner
 from app.perception.ocr import TesseractOCR
 from app.tutoring.tutor import Tutor
-from app.tutoring.tutoring_controller import TutoringController
-from app.verification.application_verifier import ApplicationVerifier
+from app.tutoring.tutoring_controller import (
+    TutoringController,
+)
+from app.verification.application_verifier import (
+    ApplicationVerifier,
+)
 from app.voice.voice_manager import VoiceManager
 
 
 class Agent:
-    """Coordinates AURA perception, planning, execution,
+    """
+    Coordinates AURA perception, planning, execution,
     tutoring, and verification.
     """
 
@@ -22,18 +29,45 @@ class Agent:
         intent_parser: IntentParser | None = None,
         planner: Planner | None = None,
         action_executor: ActionExecutor | None = None,
+        perception_executor: PerceptionExecutor | None = None,
         application_verifier: ApplicationVerifier | None = None,
         tutor: Tutor | None = None,
         tutoring_controller: TutoringController | None = None,
     ):
         self.voice_manager = voice_manager
-        self.intent_parser = intent_parser or IntentParser()
-        self.planner = planner or Planner()
-        self.action_executor = action_executor or ActionExecutor()
-        self.application_verifier = (
-            application_verifier or ApplicationVerifier()
+
+        self.intent_parser = (
+            intent_parser
+            or IntentParser()
         )
-        self.tutor = tutor or Tutor()
+
+        self.planner = (
+            planner
+            or Planner()
+        )
+
+        self.action_executor = (
+            action_executor
+            or ActionExecutor()
+        )
+
+        self.perception_executor = (
+            perception_executor
+            or PerceptionExecutor(
+                action_executor=self.action_executor,
+            )
+        )
+
+        self.application_verifier = (
+            application_verifier
+            or ApplicationVerifier()
+        )
+
+        self.tutor = (
+            tutor
+            or Tutor()
+        )
+
         self.tutoring_controller = (
             tutoring_controller
             or TutoringController(
@@ -42,46 +76,74 @@ class Agent:
             )
         )
 
-    def process_text(self, text: str) -> None:
-        """Process one text command."""
-
+    def process_text(
+        self,
+        text: str,
+    ) -> None:
         print(f"\nUser: {text}")
 
-        intent = self.intent_parser.parse(text)
+        intent = self.intent_parser.parse(
+            text
+        )
 
-        print(f"Mode: {intent.mode}")
-        print(f"Goal: {intent.goal}")
-        print(f"Risk: {intent.risk_level}")
+        print(
+            f"Mode: {intent.mode}"
+        )
 
-        task = self.planner.create_task(intent)
+        print(
+            f"Goal: {intent.goal}"
+        )
 
-        print(f"Planned actions: {task.total_actions}")
+        print(
+            f"Risk: {intent.risk_level}"
+        )
 
-        if intent.mode == "SHOW_ME_HOW":
-            self._run_tutoring_mode(task)
+        task = self.planner.create_task(
+            intent
+        )
+
+        print(
+            f"Planned actions: "
+            f"{task.total_actions}"
+        )
+
+        if intent.mode == AssistantMode.SHOW_ME_HOW:
+            self._run_tutoring_mode(
+                task
+            )
             return
 
-        self._run_execution_mode(task)
+        self._run_execution_mode(
+            task
+        )
 
-    def _run_tutoring_mode(self, task) -> None:
-        """Run the Show Me How tutoring workflow."""
-
-        instructions = self.tutor.create_instructions(task)
+    def _run_tutoring_mode(
+        self,
+        task,
+    ) -> None:
+        instructions = (
+            self.tutor.create_instructions(
+                task
+            )
+        )
 
         print(
             f"Tutorial instructions: "
             f"{len(instructions)}"
         )
 
-        self.tutoring_controller.run(instructions)
+        self.tutoring_controller.run(
+            instructions
+        )
 
         self.voice_manager.speak(
             "Tutoring session completed."
         )
 
-    def _run_execution_mode(self, task) -> None:
-        """Execute a Do It For Me task."""
-
+    def _run_execution_mode(
+        self,
+        task,
+    ) -> None:
         for index, action in enumerate(
             task.actions,
             start=1,
@@ -99,11 +161,20 @@ class Agent:
                 continue
 
             try:
-                self.action_executor.execute(action)
-                self._verify_action(action)
+                executed_action = (
+                    self._execute_action(
+                        action
+                    )
+                )
+
+                self._verify_action(
+                    executed_action
+                )
 
             except Exception as error:
-                print(f"Action failed: {error}")
+                print(
+                    f"Action failed: {error}"
+                )
 
                 self.voice_manager.speak(
                     "I could not complete that action."
@@ -115,18 +186,59 @@ class Agent:
             "Task completed."
         )
 
-    def _verify_action(self, action) -> None:
-        """Verify an action when verification is configured."""
+    def _execute_action(
+        self,
+        action,
+    ):
+        """
+        Select the correct execution path.
 
-        verification = action.verification
+        UI-targeted actions are sent through the
+        perception-driven executor. Non-UI actions
+        go directly to the atomic executor.
+        """
+
+        if action.action_type in (
+            ActionType.CLICK,
+            ActionType.DOUBLE_CLICK,
+            ActionType.MOVE_MOUSE,
+        ):
+            return self.perception_executor.execute(
+                action
+            )
+
+        self.action_executor.execute(
+            action
+        )
+
+        action.execution_result = {
+            "success": True,
+        }
+
+        return action
+
+    def _verify_action(
+        self,
+        action,
+    ) -> None:
+        verification = (
+            action.verification
+        )
 
         if not verification:
             return
 
-        verification_type = verification.get("type")
+        verification_type = (
+            verification.get("type")
+        )
 
-        if verification_type == "APPLICATION_RUNNING":
-            process = verification.get("process")
+        if (
+            verification_type
+            == "APPLICATION_RUNNING"
+        ):
+            process = verification.get(
+                "process"
+            )
 
             max_attempts = verification.get(
                 "max_attempts",
@@ -142,8 +254,10 @@ class Agent:
                 1,
                 max_attempts + 1,
             ):
-                result = self.application_verifier.verify(
-                    process
+                result = (
+                    self.application_verifier.verify(
+                        process
+                    )
                 )
 
                 print(
@@ -156,20 +270,24 @@ class Agent:
                     return
 
                 if attempt < max_attempts:
-                    time.sleep(retry_delay)
+                    time.sleep(
+                        retry_delay
+                    )
 
             raise RuntimeError(
-                f"Action verification failed after "
-                f"{max_attempts} attempts: "
+                f"Action verification failed "
+                f"after {max_attempts} attempts: "
                 f"{result.message}"
             )
 
     def run_once(self) -> None:
-        """Listen for and process one voice command."""
-
-        text = self.voice_manager.listen()
+        text = (
+            self.voice_manager.listen()
+        )
 
         if not text:
             return
 
-        self.process_text(text)
+        self.process_text(
+            text
+        )

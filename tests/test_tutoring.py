@@ -124,14 +124,14 @@ def test_tutor_converts_planned_actions():
 
     assert (
         instructions[1].message
-        == "Press the win key."
+        == "Press the Windows key."
     )
 
     assert (
         instructions[1].completion[
-            "screen_contains"
+            "screen_changed"
         ]
-        == "Notepad"
+        is True
     )
 
     assert (

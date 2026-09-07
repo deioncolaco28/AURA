@@ -5,10 +5,9 @@ from typing import Any
 
 @dataclass
 class VLMElement:
-    """Represents an element detected by a VLM."""
+    """Represents one element detected by a VLM."""
 
     element_type: str
-
     description: str
 
     x: int
@@ -17,7 +16,6 @@ class VLMElement:
     height: int
 
     confidence: float = 0.0
-
     text: str | None = None
 
     attributes: dict[str, Any] = field(
@@ -27,7 +25,7 @@ class VLMElement:
 
 @dataclass
 class VLMResult:
-    """Result returned by a visual-language model."""
+    """Structured result returned by a VLM."""
 
     elements: list[VLMElement] = field(
         default_factory=list
@@ -36,6 +34,10 @@ class VLMResult:
     description: str = ""
 
     raw_response: Any = None
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
 
 
 class VLM(ABC):
@@ -47,24 +49,35 @@ class VLM(ABC):
         image,
         instruction: str | None = None,
     ) -> VLMResult:
-        """Analyze a screenshot."""
-
         raise NotImplementedError
 
 
 class MockVLM(VLM):
-    """Development VLM used before a real model is connected."""
+    """
+    Development VLM implementation.
+
+    This allows the rest of AURA to be developed and tested
+    before connecting a real visual-language model.
+    """
+
+    def __init__(
+        self,
+        elements: list[VLMElement] | None = None,
+        description: str = "",
+    ):
+        self.elements = elements or []
+        self.description = description
 
     def analyze(
         self,
         image,
         instruction: str | None = None,
     ) -> VLMResult:
-        """Return an empty visual analysis."""
-
         return VLMResult(
-            elements=[],
-            description=(
-                "No VLM model is configured."
-            ),
+            elements=list(self.elements),
+            description=self.description,
+            metadata={
+                "provider": "mock",
+                "instruction": instruction,
+            },
         )

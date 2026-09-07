@@ -4,13 +4,13 @@ from typing import Any
 
 @dataclass
 class UIElement:
-    """Represents a unified UI element."""
+    """Represents a unified UI element detected on the screen."""
 
     element_id: str
-
     element_type: str
 
     text: str | None = None
+    description: str | None = None
 
     x: int = 0
     y: int = 0
@@ -18,7 +18,6 @@ class UIElement:
     height: int = 0
 
     confidence: float = 0.0
-
     source: str = "unknown"
 
     attributes: dict[str, Any] = field(
@@ -27,8 +26,6 @@ class UIElement:
 
     @property
     def center(self) -> tuple[int, int]:
-        """Return the center coordinates."""
-
         return (
             self.x + self.width // 2,
             self.y + self.height // 2,
@@ -36,11 +33,21 @@ class UIElement:
 
     @property
     def bounds(self) -> tuple[int, int, int, int]:
-        """Return element bounds."""
-
         return (
             self.x,
             self.y,
             self.width,
             self.height,
+        )
+
+    def has_text(self) -> bool:
+        return bool(
+            self.text
+            and self.text.strip()
+        )
+
+    def has_description(self) -> bool:
+        return bool(
+            self.description
+            and self.description.strip()
         )

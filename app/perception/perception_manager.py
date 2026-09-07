@@ -1,13 +1,11 @@
 from app.perception.ocr import OCR
-from app.perception.perception_result import (
-    PerceptionResult,
-)
+from app.perception.perception_result import PerceptionResult
 from app.perception.ui_element import UIElement
 from app.perception.vlm import VLM
 
 
 class PerceptionManager:
-    """Coordinates different perception systems."""
+    """Coordinates multiple screen perception systems."""
 
     def __init__(
         self,
@@ -22,10 +20,11 @@ class PerceptionManager:
         image,
         instruction: str | None = None,
     ) -> PerceptionResult:
-        """Analyze a screenshot using available systems."""
+        """Analyze a screenshot using all available systems."""
 
-        elements = []
-        sources_used = []
+        elements: list[UIElement] = []
+        sources_used: list[str] = []
+
         screen_description = ""
 
         if self.ocr is not None:
@@ -45,8 +44,10 @@ class PerceptionManager:
                 instruction,
             )
 
-            vlm_elements = self._convert_vlm_elements(
-                vlm_result.elements
+            vlm_elements = (
+                self._convert_vlm_elements(
+                    vlm_result.elements
+                )
             )
 
             elements.extend(
@@ -61,9 +62,7 @@ class PerceptionManager:
 
         return PerceptionResult(
             elements=elements,
-            screen_description=(
-                screen_description
-            ),
+            screen_description=screen_description,
             sources_used=sources_used,
         )
 
@@ -71,8 +70,6 @@ class PerceptionManager:
         self,
         image,
     ) -> list[UIElement]:
-        """Convert OCR results into unified elements."""
-
         if self.ocr is None:
             return []
 
@@ -90,6 +87,7 @@ class PerceptionManager:
                     element_id=f"ocr_{index}",
                     element_type="TEXT",
                     text=element.text,
+                    description=None,
                     x=element.x,
                     y=element.y,
                     width=element.width,
@@ -107,8 +105,6 @@ class PerceptionManager:
         self,
         vlm_elements,
     ) -> list[UIElement]:
-        """Convert VLM elements into unified elements."""
-
         elements = []
 
         for index, element in enumerate(
@@ -117,21 +113,16 @@ class PerceptionManager:
             elements.append(
                 UIElement(
                     element_id=f"vlm_{index}",
-                    element_type=(
-                        element.element_type
-                    ),
+                    element_type=element.element_type,
                     text=element.text,
+                    description=element.description,
                     x=element.x,
                     y=element.y,
                     width=element.width,
                     height=element.height,
-                    confidence=(
-                        element.confidence
-                    ),
+                    confidence=element.confidence,
                     source="VLM",
-                    attributes=(
-                        element.attributes
-                    ),
+                    attributes=element.attributes,
                 )
             )
 

@@ -25,6 +25,10 @@ from app.perception.vlm import (
     VLMElement,
     VLMResult,
 )
+from app.perception.vlm_adapter import (
+    StructuredVLMAdapter,
+    VLMResponseParser,
+)
 
 
 __all__ = [
@@ -34,11 +38,13 @@ __all__ = [
     "PerceptionManager",
     "PerceptionResult",
     "ScreenshotCapture",
+    "StructuredVLMAdapter",
     "TesseractOCR",
     "TextElement",
     "UIElement",
     "UIGrounder",
     "VLM",
     "VLMElement",
+    "VLMResponseParser",
     "VLMResult",
 ]
