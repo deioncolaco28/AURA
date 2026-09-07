@@ -117,3 +117,62 @@ def test_planner_creates_multi_step_notepad_task():
     )
 
     assert task.actions[1].value == "Hello World"
+
+
+def test_planner_creates_multi_step_notepad_task():
+    planner = Planner()
+
+    intent = Intent(
+        raw_text="open notepad and type hello world",
+        goal="open notepad and type hello world",
+        mode=AssistantMode.DO_IT_FOR_ME,
+    )
+
+    task = planner.create_task(intent)
+
+    assert task.total_actions == 2
+
+    assert (
+        task.actions[0].action_type
+        == ActionType.LAUNCH_APPLICATION
+    )
+
+    assert (
+        task.actions[0].target
+        == "notepad"
+    )
+
+    assert (
+        task.actions[1].action_type
+        == ActionType.TYPE_TEXT
+    )
+
+    assert (
+        task.actions[1].value
+        == "Hello World"
+    )
+
+
+def test_planner_adds_screen_text_verification():
+    planner = Planner()
+
+    intent = Intent(
+        raw_text="open notepad and type hello world",
+        goal="open notepad and type hello world",
+    )
+
+    task = planner.create_task(intent)
+
+    verification = (
+        task.actions[1].verification
+    )
+
+    assert (
+        verification["type"]
+        == "SCREEN_CONTAINS_TEXT"
+    )
+
+    assert (
+        verification["text"]
+        == "Hello World"
+    )

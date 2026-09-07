@@ -18,49 +18,53 @@ class Planner:
             goal=intent.goal,
             mode=intent.mode,
             risk_level=intent.risk_level,
-            requires_confirmation=(
-                intent.requires_confirmation
-            ),
+            requires_confirmation=intent.requires_confirmation,
         )
 
-        for action in self._generate_actions(
-            intent
-        ):
+        actions = self.generate_actions(intent)
+
+        for action in actions:
             task.add_action(action)
 
         return task
 
-    def _generate_actions(
+    def generate_actions(
         self,
         intent: Intent,
     ) -> list[Action]:
-        """Generate actions for a recognized goal."""
+        """
+        Generate an ordered sequence of actions
+        for the requested goal.
+        """
 
         goal = intent.goal.strip()
+
+        if not goal:
+            return [
+                ActionFactory.speak(
+                    "I could not determine what you want me to do."
+                )
+            ]
+
         normalized = goal.lower()
 
         if normalized == "open notepad":
-            return self._open_notepad(
+            return self._plan_open_notepad(
                 intent.mode
             )
 
-        if normalized == (
-            "open notepad and type hello world"
-        ):
-            return self._open_notepad_and_type()
+        if normalized == "open notepad and type hello world":
+            return self._plan_open_notepad_and_type()
 
         if normalized == "open calculator":
-            return self._open_calculator()
+            return self._plan_open_calculator()
 
-        return [
-            ActionFactory.speak(
-                f"I do not know how to "
-                f"{self._verb_for_mode(intent.mode)} "
-                f"{goal} yet."
-            )
-        ]
+        return self._plan_unknown_goal(
+            goal,
+            intent.mode,
+        )
 
-    def _open_notepad(
+    def _plan_open_notepad(
         self,
         mode: str,
     ) -> list[Action]:
@@ -72,21 +76,15 @@ class Planner:
                 ),
                 ActionFactory.press_key(
                     "win",
-                    description=(
-                        "Open Windows search"
-                    ),
+                    description="Open Windows search",
                 ),
                 ActionFactory.type_text(
                     "Notepad",
-                    description=(
-                        "Search for Notepad"
-                    ),
+                    description="Search for Notepad",
                 ),
                 ActionFactory.click(
                     "Notepad",
-                    description=(
-                        "Open the Notepad result"
-                    ),
+                    description="Open the Notepad result",
                     verification={
                         "type": "APPLICATION_RUNNING",
                         "process": "notepad.exe",
@@ -109,7 +107,7 @@ class Planner:
             )
         ]
 
-    def _open_notepad_and_type(
+    def _plan_open_notepad_and_type(
         self,
     ) -> list[Action]:
 
@@ -126,13 +124,15 @@ class Planner:
             ),
             ActionFactory.type_text(
                 "Hello World",
-                description=(
-                    "Type Hello World"
-                ),
+                description="Type Hello World",
+                verification={
+                    "type": "SCREEN_CONTAINS_TEXT",
+                    "text": "Hello World",
+                },
             ),
         ]
 
-    def _open_calculator(
+    def _plan_open_calculator(
         self,
     ) -> list[Action]:
 
@@ -140,14 +140,32 @@ class Planner:
             ActionFactory.launch_application(
                 "calc",
                 startup_wait=1.0,
+                verification={
+                    "type": "APPLICATION_RUNNING",
+                    "process": "CalculatorApp.exe",
+                    "max_attempts": 3,
+                    "retry_delay": 0.5,
+                },
             )
         ]
 
-    def _verb_for_mode(
+    def _plan_unknown_goal(
         self,
+        goal: str,
         mode: str,
-    ) -> str:
-        if mode == AssistantMode.SHOW_ME_HOW:
-            return "teach you how to"
+    ) -> list[Action]:
 
-        return "perform"
+        if mode == AssistantMode.SHOW_ME_HOW:
+            message = (
+                f"I do not know how to teach you "
+                f"how to {goal} yet."
+            )
+        else:
+            message = (
+                f"I do not know how to perform "
+                f"{goal} yet."
+            )
+
+        return [
+            ActionFactory.speak(message)
+        ]

@@ -14,6 +14,9 @@ from app.tutoring.tutoring_controller import (
 from app.verification.application_verifier import (
     ApplicationVerifier,
 )
+from app.verification.screen_verifier import (
+    ScreenVerifier,
+)
 from app.voice.voice_manager import VoiceManager
 
 
@@ -31,6 +34,7 @@ class Agent:
         action_executor: ActionExecutor | None = None,
         perception_executor: PerceptionExecutor | None = None,
         application_verifier: ApplicationVerifier | None = None,
+        screen_verifier: ScreenVerifier | None = None,
         tutor: Tutor | None = None,
         tutoring_controller: TutoringController | None = None,
     ):
@@ -63,6 +67,13 @@ class Agent:
             or ApplicationVerifier()
         )
 
+        self.screen_verifier = (
+            screen_verifier
+            or ScreenVerifier(
+                ocr=TesseractOCR()
+            )
+        )
+
         self.tutor = (
             tutor
             or Tutor()
@@ -80,6 +91,7 @@ class Agent:
         self,
         text: str,
     ) -> None:
+
         print(f"\nUser: {text}")
 
         intent = self.intent_parser.parse(
@@ -121,6 +133,7 @@ class Agent:
         self,
         task,
     ) -> None:
+
         instructions = (
             self.tutor.create_instructions(
                 task
@@ -144,10 +157,12 @@ class Agent:
         self,
         task,
     ) -> None:
+
         for index, action in enumerate(
             task.actions,
             start=1,
         ):
+
             print(
                 f"Executing action "
                 f"{index}/{task.total_actions}: "
@@ -172,6 +187,7 @@ class Agent:
                 )
 
             except Exception as error:
+
                 print(
                     f"Action failed: {error}"
                 )
@@ -221,66 +237,147 @@ class Agent:
         self,
         action,
     ) -> None:
-        verification = (
-            action.verification
-        )
+
+        verification = action.verification
 
         if not verification:
             return
 
-        verification_type = (
-            verification.get("type")
+        verification_type = verification.get(
+            "type"
         )
 
-        if (
-            verification_type
-            == "APPLICATION_RUNNING"
+        if verification_type == "APPLICATION_RUNNING":
+            self._verify_application_running(
+                verification
+            )
+            return
+
+        if verification_type == "SCREEN_CONTAINS_TEXT":
+            self._verify_screen_contains_text(
+                verification
+            )
+            return
+
+        raise ValueError(
+            f"Unsupported verification type: "
+            f"{verification_type}"
+        )
+
+    def _verify_application_running(
+        self,
+        verification,
+    ) -> None:
+
+        process = verification.get(
+            "process"
+        )
+
+        if not process:
+            raise ValueError(
+                "APPLICATION_RUNNING verification "
+                "requires a process."
+            )
+
+        max_attempts = verification.get(
+            "max_attempts",
+            3,
+        )
+
+        retry_delay = verification.get(
+            "retry_delay",
+            0.5,
+        )
+
+        for attempt in range(
+            1,
+            max_attempts + 1,
         ):
-            process = verification.get(
-                "process"
-            )
 
-            max_attempts = verification.get(
-                "max_attempts",
-                3,
-            )
-
-            retry_delay = verification.get(
-                "retry_delay",
-                0.5,
-            )
-
-            for attempt in range(
-                1,
-                max_attempts + 1,
-            ):
-                result = (
-                    self.application_verifier.verify(
-                        process
-                    )
+            result = (
+                self.application_verifier.verify(
+                    process
                 )
+            )
 
-                print(
-                    f"Verification attempt "
-                    f"{attempt}/{max_attempts}: "
-                    f"{result.message}"
-                )
-
-                if result.success:
-                    return
-
-                if attempt < max_attempts:
-                    time.sleep(
-                        retry_delay
-                    )
-
-            raise RuntimeError(
-                f"Action verification failed "
-                f"after {max_attempts} attempts: "
+            print(
+                f"Verification attempt "
+                f"{attempt}/{max_attempts}: "
                 f"{result.message}"
             )
 
+            if result.success:
+                return
+
+            if attempt < max_attempts:
+                time.sleep(
+                    retry_delay
+                )
+
+        raise RuntimeError(
+            f"Application verification failed "
+            f"after {max_attempts} attempts: "
+            f"{result.message}"
+        )
+
+    def _verify_screen_contains_text(
+        self,
+        verification,
+    ) -> None:
+
+        text = verification.get(
+            "text"
+        )
+
+        if not text:
+            raise ValueError(
+                "SCREEN_CONTAINS_TEXT verification "
+                "requires text."
+            )
+
+        max_attempts = verification.get(
+            "max_attempts",
+            3,
+        )
+
+        retry_delay = verification.get(
+            "retry_delay",
+            0.5,
+        )
+
+        for attempt in range(
+            1,
+            max_attempts + 1,
+        ):
+
+            result = (
+                self.screen_verifier.contains_text(
+                    str(text)
+                )
+            )
+
+            print(
+                f"Screen verification attempt "
+                f"{attempt}/{max_attempts}: "
+                f"{result.message}"
+            )
+
+            if result.success:
+                return
+
+            if attempt < max_attempts:
+                time.sleep(
+                    retry_delay
+                )
+
+        raise RuntimeError(
+            f"Screen verification failed "
+            f"after {max_attempts} attempts: "
+            f"{result.message}"
+        )
+
     def run_once(self) -> None:
+
         text = (
             self.voice_manager.listen()
         )
