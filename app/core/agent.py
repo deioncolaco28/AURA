@@ -6,6 +6,7 @@ from app.automation.perception_executor import (
 )
 from app.config.constants import AssistantMode
 from app.core.execution_engine import ExecutionEngine
+from app.core.replanner import Replanner
 from app.intelligence.action import ActionType
 from app.intelligence.intent_parser import IntentParser
 from app.intelligence.planner import Planner
@@ -26,7 +27,7 @@ from app.voice.voice_manager import VoiceManager
 class Agent:
     """
     Coordinates AURA perception, planning, execution,
-    tutoring, and verification.
+    tutoring, verification, and recovery.
     """
 
     def __init__(
@@ -41,6 +42,7 @@ class Agent:
         tutor: Tutor | None = None,
         tutoring_controller: TutoringController | None = None,
         execution_engine: ExecutionEngine | None = None,
+        replanner: Replanner | None = None,
     ):
         self.voice_manager = voice_manager
 
@@ -91,14 +93,19 @@ class Agent:
             )
         )
 
-        self.execution_engine = (
-            execution_engine
-            or ExecutionEngine(
-                execute_action=self._execute_action,
-                verify_action=self._verify_action,
-                max_retries=1,
+        if execution_engine is not None:
+            self.execution_engine = execution_engine
+
+        else:
+            self.execution_engine = (
+                ExecutionEngine(
+                    execute_action=self._execute_action,
+                    verify_action=self._verify_action,
+                    max_retries=1,
+                    replanner=replanner,
+                    max_replans=1,
+                )
             )
-        )
 
     def process_text(
         self,
@@ -188,9 +195,7 @@ class Agent:
         """
         Execute one action.
 
-        UI actions use fresh screen perception on every
-        execution attempt. This means recovery automatically
-        gets a fresh view of the computer.
+        UI actions use fresh screen perception.
         """
 
         print(

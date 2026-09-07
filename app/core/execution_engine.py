@@ -4,21 +4,25 @@ from app.core.execution import (
     ExecutionContext,
     ExecutionStep,
 )
+from app.core.replanner import (
+    NoOpReplanner,
+    Replanner,
+)
 from app.intelligence.action import Action
 from app.intelligence.task import Task
 
 
 class ExecutionEngine:
     """
-    Executes tasks using a bounded observe/act/verify/recover loop.
+    Executes tasks using an observe/act/verify/recover loop.
 
-    The engine itself does not know how a computer action works.
-    Those responsibilities remain injected through callbacks.
+    Recovery has two levels:
 
-    Recovery is intentionally simple at this stage:
-    a failed action can be retried a limited number of times.
+    1. Retry the failed action.
+    2. Ask the configured Replanner for replacement actions.
 
-    More advanced recovery and replanning will be added later.
+    The replanner is deliberately injected so the execution
+    engine remains independent from any specific AI model.
     """
 
     def __init__(
@@ -26,25 +30,42 @@ class ExecutionEngine:
         execute_action: Callable[[Action], Action],
         verify_action: Callable[[Action], None],
         max_retries: int = 1,
+        replanner: Replanner | None = None,
+        max_replans: int = 1,
     ):
         if max_retries < 0:
             raise ValueError(
                 "max_retries cannot be negative."
             )
 
+        if max_replans < 0:
+            raise ValueError(
+                "max_replans cannot be negative."
+            )
+
         self.execute_action = execute_action
         self.verify_action = verify_action
+
         self.max_retries = max_retries
+
+        self.replanner = (
+            replanner
+            or NoOpReplanner()
+        )
+
+        self.max_replans = max_replans
 
     def run(
         self,
         task: Task,
     ) -> ExecutionContext:
         """
-        Execute every task action sequentially.
+        Execute a task while allowing bounded replanning.
 
-        A failed action is retried up to max_retries times.
-        The task stops only after all recovery attempts fail.
+        The action queue begins with task.actions.
+
+        When an action fails after retries, the replanner may
+        provide replacement actions.
         """
 
         context = ExecutionContext(
@@ -52,7 +73,16 @@ class ExecutionEngine:
             total_steps=task.total_actions,
         )
 
-        for action in task.actions:
+        action_queue = list(
+            task.actions
+        )
+
+        replan_count = 0
+
+        while action_queue:
+
+            action = action_queue.pop(0)
+
             context.current_step += 1
 
             step = context.add_step(
@@ -64,8 +94,46 @@ class ExecutionEngine:
                 context,
             )
 
-            if step.status == "FAILED":
+            if step.status == "COMPLETED":
+                continue
+
+            if (
+                replan_count
+                >= self.max_replans
+            ):
                 break
+
+            replan_count += 1
+
+            replacement_actions = (
+                self._replan(
+                    task,
+                    context,
+                    action,
+                )
+            )
+
+            if not replacement_actions:
+                break
+
+            print(
+                f"Replanner produced "
+                f"{len(replacement_actions)} "
+                f"replacement action(s)."
+            )
+
+            action_queue = (
+                replacement_actions
+                + action_queue
+            )
+
+            context.metadata[
+                "replan_count"
+            ] = replan_count
+
+        context.metadata[
+            "replan_count"
+        ] = replan_count
 
         return context
 
@@ -74,7 +142,7 @@ class ExecutionEngine:
         step: ExecutionStep,
         context: ExecutionContext,
     ) -> None:
-        """Execute one action with bounded recovery."""
+        """Execute one action with bounded retries."""
 
         total_attempts = (
             self.max_retries + 1
@@ -133,14 +201,55 @@ class ExecutionEngine:
                         step
                     )
 
-                    print(
-                        "Attempting recovery..."
-                    )
-
         context.mark_failed(
             step,
-            step.error or "Unknown execution error.",
+            step.error
+            or "Unknown execution error.",
         )
+
+    def _replan(
+        self,
+        task: Task,
+        context: ExecutionContext,
+        failed_action: Action,
+    ) -> list[Action]:
+        """Ask the configured replanner for new actions."""
+
+        print(
+            "Requesting replanning..."
+        )
+
+        try:
+            actions = self.replanner.replan(
+                task=task,
+                context=context,
+                failed_action=failed_action,
+            )
+
+        except Exception as error:
+            print(
+                f"Replanning failed: {error}"
+            )
+            return []
+
+        if actions is None:
+            return []
+
+        if not isinstance(actions, list):
+            raise TypeError(
+                "Replanner must return a list of actions."
+            )
+
+        for action in actions:
+            if not isinstance(
+                action,
+                Action,
+            ):
+                raise TypeError(
+                    "Replanner returned a non-Action value."
+                )
+
+        return actions
 
     def _copy_execution_result(
         self,

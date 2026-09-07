@@ -28,8 +28,9 @@ class ExecutionContext:
     """
     Stores runtime information for one task execution.
 
-    The context becomes the central execution history used
-    by recovery and future replanning components.
+    Failed historical steps remain recorded, but a task can
+    still be considered successful if a replanned replacement
+    completes the intended work.
     """
 
     goal: str
@@ -47,23 +48,47 @@ class ExecutionContext:
 
     @property
     def completed(self) -> bool:
-        """Return True when every registered step completed."""
+        """
+        Return True when the task's active execution path
+        has successfully completed.
+
+        Historical failed steps caused by replanning do not
+        automatically make the overall task unsuccessful.
+        """
 
         if not self.steps:
             return False
 
-        return all(
-            step.status == "COMPLETED"
-            for step in self.steps
-        )
+        if self.failed and not self.was_replanned_successfully:
+            return False
+
+        return self.steps[-1].status == "COMPLETED"
 
     @property
     def failed(self) -> bool:
-        """Return True when at least one step failed."""
+        """Return True when an execution step failed."""
 
         return any(
             step.status == "FAILED"
             for step in self.steps
+        )
+
+    @property
+    def was_replanned_successfully(self) -> bool:
+        """
+        Return True when replanning occurred and the latest
+        execution path completed successfully.
+        """
+
+        return (
+            self.metadata.get(
+                "replan_count",
+                0,
+            )
+            > 0
+            and bool(self.steps)
+            and self.steps[-1].status
+            == "COMPLETED"
         )
 
     @property
