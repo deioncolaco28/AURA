@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import pytesseract
-from pytesseract import Output
 
 
 @dataclass
@@ -10,17 +9,15 @@ class TextElement:
     """Represents text detected on the screen."""
 
     text: str
-
     x: int
     y: int
     width: int
     height: int
-
     confidence: float
 
     @property
     def center(self) -> tuple[int, int]:
-        """Return the center coordinate of the text."""
+        """Return the center coordinates."""
 
         return (
             self.x + self.width // 2,
@@ -29,58 +26,94 @@ class TextElement:
 
 
 class OCR(ABC):
-    """Interface for optical character recognition."""
+    """Abstract OCR interface."""
 
     @abstractmethod
     def extract_text(self, image) -> str:
-        """Extract text from an image."""
+        """Extract plain text from an image."""
         raise NotImplementedError
 
     @abstractmethod
-    def detect_text(self, image) -> list[TextElement]:
-        """Detect text and its screen position."""
+    def detect_text(
+        self,
+        image,
+    ) -> list[TextElement]:
+        """Detect text elements and their positions."""
         raise NotImplementedError
 
 
 class TesseractOCR(OCR):
-    """OCR implementation using Tesseract."""
+    """Tesseract-based OCR implementation."""
 
-    def extract_text(self, image) -> str:
-        """Extract visible text from an image."""
+    def __init__(
+        self,
+        language: str = "eng",
+        minimum_confidence: float = 30.0,
+    ):
+        self.language = language
+        self.minimum_confidence = (
+            minimum_confidence
+        )
 
-        return pytesseract.image_to_string(image)
+    def extract_text(
+        self,
+        image,
+    ) -> str:
+        """Extract text from an image."""
 
-    def detect_text(self, image) -> list[TextElement]:
-        """Detect text and its bounding boxes."""
+        return pytesseract.image_to_string(
+            image,
+            lang=self.language,
+        )
+
+    def detect_text(
+        self,
+        image,
+    ) -> list[TextElement]:
+        """Detect text with coordinates."""
 
         data = pytesseract.image_to_data(
             image,
-            output_type=Output.DICT,
+            lang=self.language,
+            output_type=(
+                pytesseract.Output.DICT
+            ),
         )
 
         elements = []
 
-        for i, text in enumerate(data["text"]):
+        for index, text in enumerate(
+            data["text"]
+        ):
             text = text.strip()
 
             if not text:
                 continue
 
             try:
-                confidence = float(data["conf"][i])
-            except (ValueError, TypeError):
-                confidence = 0.0
+                confidence = float(
+                    data["conf"][index]
+                )
+            except (
+                ValueError,
+                TypeError,
+            ):
+                continue
 
-            if confidence < 0:
+            if confidence < self.minimum_confidence:
                 continue
 
             elements.append(
                 TextElement(
                     text=text,
-                    x=int(data["left"][i]),
-                    y=int(data["top"][i]),
-                    width=int(data["width"][i]),
-                    height=int(data["height"][i]),
+                    x=int(data["left"][index]),
+                    y=int(data["top"][index]),
+                    width=int(
+                        data["width"][index]
+                    ),
+                    height=int(
+                        data["height"][index]
+                    ),
                     confidence=confidence,
                 )
             )

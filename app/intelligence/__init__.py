@@ -4,6 +4,7 @@ from app.intelligence.intent_parser import IntentParser
 from app.intelligence.mode_router import ModeRouter
 from app.intelligence.planner import Planner
 from app.intelligence.task import Task
+from app.tutoring.tutoring_controller import TutoringController
 
 __all__ = [
     "Action",
@@ -13,4 +14,9 @@ __all__ = [
     "ModeRouter",
     "Planner",
     "Task",
+    "TutoringInstruction",
+    "HighlightOverlay",
+    "Tutor",
+    "TutoringEngine",
+    "TutoringController",
 ]

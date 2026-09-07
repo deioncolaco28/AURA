@@ -4,14 +4,17 @@ from app.automation.action_executor import ActionExecutor
 from app.intelligence.action import ActionType
 from app.intelligence.intent_parser import IntentParser
 from app.intelligence.planner import Planner
-from app.verification.application_verifier import (
-    ApplicationVerifier,
-)
+from app.perception.ocr import TesseractOCR
+from app.tutoring.tutor import Tutor
+from app.tutoring.tutoring_controller import TutoringController
+from app.verification.application_verifier import ApplicationVerifier
 from app.voice.voice_manager import VoiceManager
 
 
 class Agent:
-    """Coordinates AURA's perception, planning, execution, and verification."""
+    """Coordinates AURA perception, planning, execution,
+    tutoring, and verification.
+    """
 
     def __init__(
         self,
@@ -20,28 +23,27 @@ class Agent:
         planner: Planner | None = None,
         action_executor: ActionExecutor | None = None,
         application_verifier: ApplicationVerifier | None = None,
+        tutor: Tutor | None = None,
+        tutoring_controller: TutoringController | None = None,
     ):
         self.voice_manager = voice_manager
-
-        self.intent_parser = (
-            intent_parser or IntentParser()
-        )
-
-        self.planner = (
-            planner or Planner()
-        )
-
-        self.action_executor = (
-            action_executor or ActionExecutor()
-        )
-
+        self.intent_parser = intent_parser or IntentParser()
+        self.planner = planner or Planner()
+        self.action_executor = action_executor or ActionExecutor()
         self.application_verifier = (
-            application_verifier
-            or ApplicationVerifier()
+            application_verifier or ApplicationVerifier()
+        )
+        self.tutor = tutor or Tutor()
+        self.tutoring_controller = (
+            tutoring_controller
+            or TutoringController(
+                voice_manager=voice_manager,
+                ocr=TesseractOCR(),
+            )
         )
 
     def process_text(self, text: str) -> None:
-        """Process a single user request."""
+        """Process one text command."""
 
         print(f"\nUser: {text}")
 
@@ -53,9 +55,32 @@ class Agent:
 
         task = self.planner.create_task(intent)
 
+        print(f"Planned actions: {task.total_actions}")
+
+        if intent.mode == "SHOW_ME_HOW":
+            self._run_tutoring_mode(task)
+            return
+
+        self._run_execution_mode(task)
+
+    def _run_tutoring_mode(self, task) -> None:
+        """Run the Show Me How tutoring workflow."""
+
+        instructions = self.tutor.create_instructions(task)
+
         print(
-            f"Planned actions: {task.total_actions}"
+            f"Tutorial instructions: "
+            f"{len(instructions)}"
         )
+
+        self.tutoring_controller.run(instructions)
+
+        self.voice_manager.speak(
+            "Tutoring session completed."
+        )
+
+    def _run_execution_mode(self, task) -> None:
+        """Execute a Do It For Me task."""
 
         for index, action in enumerate(
             task.actions,
@@ -75,13 +100,10 @@ class Agent:
 
             try:
                 self.action_executor.execute(action)
-
                 self._verify_action(action)
 
             except Exception as error:
-                print(
-                    f"Action failed: {error}"
-                )
+                print(f"Action failed: {error}")
 
                 self.voice_manager.speak(
                     "I could not complete that action."
@@ -94,7 +116,7 @@ class Agent:
         )
 
     def _verify_action(self, action) -> None:
-        """Verify an executed action with bounded retries."""
+        """Verify an action when verification is configured."""
 
         verification = action.verification
 
@@ -143,7 +165,7 @@ class Agent:
             )
 
     def run_once(self) -> None:
-        """Listen for and process one user request."""
+        """Listen for and process one voice command."""
 
         text = self.voice_manager.listen()
 
