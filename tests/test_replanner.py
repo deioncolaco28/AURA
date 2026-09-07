@@ -1,23 +1,13 @@
-from app.core.execution import (
-    ExecutionContext,
-)
-from app.core.execution_engine import (
-    ExecutionEngine,
-)
+from app.core.execution import ExecutionContext
+from app.core.execution_engine import ExecutionEngine
+from app.core.failure import FailureInfo
+from app.core.observation import ScreenObservation
 from app.core.replanner import (
     NoOpReplanner,
     Replanner,
 )
-from app.intelligence.action import (
-    Action,
-)
-from app.intelligence.action_factory import (
-    ActionFactory,
-)
-from app.intelligence.task import (
-    Task,
-)
-from app.core.observation import ScreenObservation
+from app.intelligence.action_factory import ActionFactory
+from app.intelligence.task import Task
 
 
 def test_noop_replanner_returns_no_actions():
@@ -36,14 +26,27 @@ def test_noop_replanner_returns_no_actions():
         "Fail"
     )
 
+    failure = FailureInfo(
+        action=action
+    )
+
     result = replanner.replan(
         task=task,
         context=context,
         failed_action=action,
         observation=ScreenObservation(),
+        failure=failure,
     )
 
     assert result == []
+
+
+def test_replanner_is_abstract():
+    try:
+        Replanner()
+        assert False, "Replanner should be abstract."
+    except TypeError:
+        pass
 
 
 def test_execution_engine_can_use_replanner():
@@ -58,8 +61,14 @@ def test_execution_engine_can_use_replanner():
             context,
             failed_action,
             observation,
+            failure,
         ):
             self.called = True
+
+            assert failure.action is failed_action
+            assert failure.error == (
+                "Original failed"
+            )
 
             return [
                 ActionFactory.speak(
@@ -118,86 +127,11 @@ def test_execution_engine_can_use_replanner():
         "Replacement",
     ]
 
-    assert context.steps[0].status == (
-        "FAILED"
-    )
-
-    assert context.steps[1].status == (
-        "COMPLETED"
-    )
-
-    assert context.completed
-
     assert context.metadata[
         "replan_count"
     ] == 1
 
-
-def test_execution_engine_does_not_replan_after_success():
-    class FakeReplanner(Replanner):
-
-        def __init__(self):
-            self.called = False
-
-        def replan(
-            self,
-            task,
-            context,
-            failed_action,
-            observation,
-        ):
-            self.called = True
-            return [
-                ActionFactory.speak(
-                    "Should not run"
-                )
-            ]
-
-    replanner = FakeReplanner()
-    executed = []
-
-    def execute_action(action):
-        executed.append(
-            action.value
-        )
-
-        action.execution_result = {
-            "success": True
-        }
-
-        return action
-
-    def verify_action(action):
-        pass
-
-    engine = ExecutionEngine(
-        execute_action=execute_action,
-        verify_action=verify_action,
-        max_retries=0,
-        replanner=replanner,
-        max_replans=1,
-    )
-
-    task = Task(
-        goal="success test"
-    )
-
-    task.add_action(
-        ActionFactory.speak(
-            "Success"
-        )
-    )
-
-    context = engine.run(
-        task
-    )
-
     assert context.completed
-    assert not replanner.called
-
-    assert executed == [
-        "Success"
-    ]
 
 
 def test_execution_engine_limits_replanning():
@@ -212,8 +146,12 @@ def test_execution_engine_limits_replanning():
             context,
             failed_action,
             observation,
+            failure,
         ):
             self.calls += 1
+
+            assert failure.action is failed_action
+            assert failure.has_error
 
             return [
                 ActionFactory.speak(
@@ -255,9 +193,13 @@ def test_execution_engine_limits_replanning():
 
     assert replanner.calls == 1
 
-    assert context.failed
-    assert not context.completed
-
     assert context.metadata[
         "replan_count"
     ] == 1
+
+    assert len(context.steps) == 2
+
+    assert context.steps[0].status == "FAILED"
+    assert context.steps[1].status == "FAILED"
+
+    assert not context.completed

@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 from app.core.execution import ExecutionContext
+from app.core.failure import FailureInfo
 from app.core.observation import ScreenObservation
 from app.intelligence.action import Action
 from app.intelligence.task import Task
@@ -14,9 +15,9 @@ class Replanner(ABC):
 
     - the original task
     - execution history
-    - the current screen observation
-    - the failed action
-    - failure information
+    - current screen observation
+    - failed action
+    - structured failure information
 
     and produce a new action sequence.
     """
@@ -28,6 +29,7 @@ class Replanner(ABC):
         context: ExecutionContext,
         failed_action: Action,
         observation: ScreenObservation,
+        failure: FailureInfo,
     ) -> list[Action]:
         raise NotImplementedError
 
@@ -43,5 +45,6 @@ class NoOpReplanner(Replanner):
         context: ExecutionContext,
         failed_action: Action,
         observation: ScreenObservation,
+        failure: FailureInfo,
     ) -> list[Action]:
         return []

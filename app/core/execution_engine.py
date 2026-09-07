@@ -4,6 +4,10 @@ from app.core.execution import (
     ExecutionContext,
     ExecutionStep,
 )
+from app.core.failure import (
+    FailureInfo,
+    FailureType,
+)
 from app.core.observation import ScreenObservation
 from app.core.observer import (
     ComputerObserver,
@@ -26,6 +30,12 @@ class ExecutionEngine:
     1. Retry the failed action.
     2. Observe the computer and ask the replanner
        for replacement actions.
+
+    Failures are classified as:
+
+        EXECUTION_FAILURE
+        VERIFICATION_FAILURE
+        UNKNOWN_FAILURE
     """
 
     def __init__(
@@ -111,12 +121,19 @@ class ExecutionEngine:
 
             observation = self._observe()
 
+            failure = (
+                self._build_failure_info(
+                    step
+                )
+            )
+
             replacement_actions = (
                 self._replan(
                     task=task,
                     context=context,
                     failed_action=action,
                     observation=observation,
+                    failure=failure,
                 )
             )
 
@@ -176,6 +193,29 @@ class ExecutionEngine:
                     )
                 )
 
+            except Exception as error:
+                step.error = str(error)
+
+                step.verification = {
+                    "success": False,
+                    "failure_type": (
+                        FailureType.EXECUTION
+                    ),
+                }
+
+                print(
+                    f"Action attempt failed: "
+                    f"{error}"
+                )
+
+                if attempt < total_attempts:
+                    context.mark_recovering(
+                        step
+                    )
+
+                continue
+
+            try:
                 self.verify_action(
                     executed_action
                 )
@@ -198,8 +238,20 @@ class ExecutionEngine:
             except Exception as error:
                 step.error = str(error)
 
+                step.verification = {
+                    "success": False,
+                    "failure_type": (
+                        FailureType.VERIFICATION
+                    ),
+                    "type": (
+                        executed_action.verification.get(
+                            "type"
+                        )
+                    ),
+                }
+
                 print(
-                    f"Action attempt failed: "
+                    f"Verification failed: "
                     f"{error}"
                 )
 
@@ -208,10 +260,28 @@ class ExecutionEngine:
                         step
                     )
 
+        if (
+            step.verification.get(
+                "failure_type"
+            )
+            == FailureType.VERIFICATION
+        ):
+            failure_message = (
+                "Verification failed: "
+                + (
+                    step.error
+                    or "Unknown verification error."
+                )
+            )
+        else:
+            failure_message = (
+                step.error
+                or "Unknown execution error."
+            )
+
         context.mark_failed(
             step,
-            step.error
-            or "Unknown execution error.",
+            failure_message,
         )
 
     def _observe(self) -> ScreenObservation:
@@ -258,6 +328,7 @@ class ExecutionEngine:
         context: ExecutionContext,
         failed_action: Action,
         observation: ScreenObservation,
+        failure: FailureInfo,
     ) -> list[Action]:
         """Ask the configured replanner for new actions."""
 
@@ -271,6 +342,7 @@ class ExecutionEngine:
                 context=context,
                 failed_action=failed_action,
                 observation=observation,
+                failure=failure,
             )
 
         except Exception as error:
@@ -297,6 +369,41 @@ class ExecutionEngine:
                 )
 
         return actions
+
+    def _build_failure_info(
+        self,
+        step: ExecutionStep,
+    ) -> FailureInfo:
+        """
+        Build structured information about a failed step.
+        """
+
+        failure_type = (
+            step.verification.get(
+                "failure_type",
+                FailureType.UNKNOWN,
+            )
+        )
+
+        verification = dict(
+            step.action.verification
+        )
+
+        verification.update(
+            step.verification
+        )
+
+        return FailureInfo(
+            action=step.action,
+            error=step.error,
+            verification=verification,
+            attempt=step.attempts,
+            failure_type=failure_type,
+            metadata={
+                "step_index": step.index,
+                "status": step.status,
+            },
+        )
 
     def _copy_execution_result(
         self,

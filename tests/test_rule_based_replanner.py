@@ -12,6 +12,7 @@ from app.intelligence.action_factory import (
 )
 from app.intelligence.task import Task
 from app.perception.ui_element import UIElement
+from app.core.failure import FailureInfo
 
 
 def create_observation(
@@ -58,6 +59,9 @@ def test_replanner_recovers_click_when_target_exists():
         context=context,
         failed_action=failed_action,
         observation=observation,
+        failure=FailureInfo(
+            action=failed_action
+        ),
     )
 
     assert len(actions) == 1
@@ -127,6 +131,9 @@ def test_replanner_returns_nothing_when_target_missing():
         context=context,
         failed_action=failed_action,
         observation=observation,
+        failure=FailureInfo(
+            action=failed_action
+        ),
     )
 
     assert actions == []
@@ -169,6 +176,9 @@ def test_replanner_recovers_double_click():
         context=context,
         failed_action=failed_action,
         observation=observation,
+        failure=FailureInfo(
+            action=failed_action
+        ),
     )
 
     assert len(actions) == 1
@@ -222,6 +232,9 @@ def test_replanner_recovers_type_text_when_screen_has_elements():
         context=context,
         failed_action=failed_action,
         observation=observation,
+        failure=FailureInfo(
+            action=failed_action
+        ),
     )
 
     assert len(actions) == 1
@@ -271,6 +284,9 @@ def test_replanner_stops_when_observation_failed():
         context=context,
         failed_action=failed_action,
         observation=observation,
+        failure=FailureInfo(
+            action=failed_action
+        ),
     )
 
     assert actions == []
