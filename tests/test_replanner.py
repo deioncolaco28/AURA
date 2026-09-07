@@ -17,6 +17,7 @@ from app.intelligence.action_factory import (
 from app.intelligence.task import (
     Task,
 )
+from app.core.observation import ScreenObservation
 
 
 def test_noop_replanner_returns_no_actions():
@@ -39,6 +40,7 @@ def test_noop_replanner_returns_no_actions():
         task=task,
         context=context,
         failed_action=action,
+        observation=ScreenObservation(),
     )
 
     assert result == []
@@ -55,6 +57,7 @@ def test_execution_engine_can_use_replanner():
             task,
             context,
             failed_action,
+            observation,
         ):
             self.called = True
 
@@ -141,6 +144,7 @@ def test_execution_engine_does_not_replan_after_success():
             task,
             context,
             failed_action,
+            observation,
         ):
             self.called = True
             return [
@@ -207,6 +211,7 @@ def test_execution_engine_limits_replanning():
             task,
             context,
             failed_action,
+            observation,
         ):
             self.calls += 1
 

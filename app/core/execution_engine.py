@@ -4,6 +4,11 @@ from app.core.execution import (
     ExecutionContext,
     ExecutionStep,
 )
+from app.core.observation import ScreenObservation
+from app.core.observer import (
+    ComputerObserver,
+    ScreenObserver,
+)
 from app.core.replanner import (
     NoOpReplanner,
     Replanner,
@@ -19,10 +24,8 @@ class ExecutionEngine:
     Recovery has two levels:
 
     1. Retry the failed action.
-    2. Ask the configured Replanner for replacement actions.
-
-    The replanner is deliberately injected so the execution
-    engine remains independent from any specific AI model.
+    2. Observe the computer and ask the replanner
+       for replacement actions.
     """
 
     def __init__(
@@ -32,6 +35,7 @@ class ExecutionEngine:
         max_retries: int = 1,
         replanner: Replanner | None = None,
         max_replans: int = 1,
+        observer: ComputerObserver | None = None,
     ):
         if max_retries < 0:
             raise ValueError(
@@ -55,17 +59,17 @@ class ExecutionEngine:
 
         self.max_replans = max_replans
 
+        self.observer = (
+            observer
+            or ScreenObserver()
+        )
+
     def run(
         self,
         task: Task,
     ) -> ExecutionContext:
         """
         Execute a task while allowing bounded replanning.
-
-        The action queue begins with task.actions.
-
-        When an action fails after retries, the replanner may
-        provide replacement actions.
         """
 
         context = ExecutionContext(
@@ -105,11 +109,14 @@ class ExecutionEngine:
 
             replan_count += 1
 
+            observation = self._observe()
+
             replacement_actions = (
                 self._replan(
-                    task,
-                    context,
-                    action,
+                    task=task,
+                    context=context,
+                    failed_action=action,
+                    observation=observation,
                 )
             )
 
@@ -207,11 +214,50 @@ class ExecutionEngine:
             or "Unknown execution error.",
         )
 
+    def _observe(self) -> ScreenObservation:
+        """
+        Observe the current computer state.
+
+        Observation failures are isolated from the main
+        execution loop so that recovery can safely abort
+        when perception is unavailable.
+        """
+
+        print(
+            "Observing current screen..."
+        )
+
+        try:
+            observation = (
+                self.observer.observe()
+            )
+
+        except Exception as error:
+            print(
+                f"Observation failed: {error}"
+            )
+
+            return ScreenObservation(
+                metadata={
+                    "observation_failed": True,
+                    "error": str(error),
+                }
+            )
+
+        print(
+            f"Observed "
+            f"{observation.element_count} "
+            f"UI element(s)."
+        )
+
+        return observation
+
     def _replan(
         self,
         task: Task,
         context: ExecutionContext,
         failed_action: Action,
+        observation: ScreenObservation,
     ) -> list[Action]:
         """Ask the configured replanner for new actions."""
 
@@ -224,6 +270,7 @@ class ExecutionEngine:
                 task=task,
                 context=context,
                 failed_action=failed_action,
+                observation=observation,
             )
 
         except Exception as error:

@@ -22,6 +22,7 @@ from app.verification.screen_verifier import (
     ScreenVerifier,
 )
 from app.voice.voice_manager import VoiceManager
+from app.core.observer import ScreenObserver
 
 
 class Agent:
@@ -98,12 +99,14 @@ class Agent:
 
         else:
             self.execution_engine = (
-                ExecutionEngine(
+                execution_engine
+                or ExecutionEngine(
                     execute_action=self._execute_action,
                     verify_action=self._verify_action,
                     max_retries=1,
                     replanner=replanner,
                     max_replans=1,
+                    observer=ScreenObserver(),
                 )
             )
 
