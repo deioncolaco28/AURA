@@ -23,6 +23,9 @@ from app.verification.screen_verifier import (
 )
 from app.voice.voice_manager import VoiceManager
 from app.core.observer import ScreenObserver
+from app.core.rule_based_replanner import (
+    RuleBasedReplanner,
+)
 
 
 class Agent:
@@ -104,7 +107,10 @@ class Agent:
                     execute_action=self._execute_action,
                     verify_action=self._verify_action,
                     max_retries=1,
-                    replanner=replanner,
+                    replanner=(
+                        replanner
+                        or RuleBasedReplanner()
+                    ),
                     max_replans=1,
                     observer=ScreenObserver(),
                 )
