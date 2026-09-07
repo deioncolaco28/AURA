@@ -1,8 +1,11 @@
 import time
 
 from app.automation.action_executor import ActionExecutor
-from app.automation.perception_executor import PerceptionExecutor
+from app.automation.perception_executor import (
+    PerceptionExecutor,
+)
 from app.config.constants import AssistantMode
+from app.core.execution_engine import ExecutionEngine
 from app.intelligence.action import ActionType
 from app.intelligence.intent_parser import IntentParser
 from app.intelligence.planner import Planner
@@ -37,6 +40,7 @@ class Agent:
         screen_verifier: ScreenVerifier | None = None,
         tutor: Tutor | None = None,
         tutoring_controller: TutoringController | None = None,
+        execution_engine: ExecutionEngine | None = None,
     ):
         self.voice_manager = voice_manager
 
@@ -84,6 +88,15 @@ class Agent:
             or TutoringController(
                 voice_manager=voice_manager,
                 ocr=TesseractOCR(),
+            )
+        )
+
+        self.execution_engine = (
+            execution_engine
+            or ExecutionEngine(
+                execute_action=self._execute_action,
+                verify_action=self._verify_action,
+                max_retries=1,
             )
         )
 
@@ -158,48 +171,14 @@ class Agent:
         task,
     ) -> None:
 
-        for index, action in enumerate(
-            task.actions,
-            start=1,
-        ):
-
-            print(
-                f"Executing action "
-                f"{index}/{task.total_actions}: "
-                f"{action.action_type}"
+        context = (
+            self.execution_engine.run(
+                task
             )
+        )
 
-            if action.action_type == ActionType.SPEAK:
-                self.voice_manager.speak(
-                    str(action.value)
-                )
-                continue
-
-            try:
-                executed_action = (
-                    self._execute_action(
-                        action
-                    )
-                )
-
-                self._verify_action(
-                    executed_action
-                )
-
-            except Exception as error:
-
-                print(
-                    f"Action failed: {error}"
-                )
-
-                self.voice_manager.speak(
-                    "I could not complete that action."
-                )
-
-                return
-
-        self.voice_manager.speak(
-            "Task completed."
+        self._report_execution_result(
+            context
         )
 
     def _execute_action(
@@ -207,12 +186,17 @@ class Agent:
         action,
     ):
         """
-        Select the correct execution path.
+        Execute one action.
 
-        UI-targeted actions are sent through the
-        perception-driven executor. Non-UI actions
-        go directly to the atomic executor.
+        UI actions use fresh screen perception on every
+        execution attempt. This means recovery automatically
+        gets a fresh view of the computer.
         """
+
+        print(
+            f"Executing action: "
+            f"{action.action_type}"
+        )
 
         if action.action_type in (
             ActionType.CLICK,
@@ -243,8 +227,8 @@ class Agent:
         if not verification:
             return
 
-        verification_type = verification.get(
-            "type"
+        verification_type = (
+            verification.get("type")
         )
 
         if verification_type == "APPLICATION_RUNNING":
@@ -374,6 +358,48 @@ class Agent:
             f"Screen verification failed "
             f"after {max_attempts} attempts: "
             f"{result.message}"
+        )
+
+    def _report_execution_result(
+        self,
+        context,
+    ) -> None:
+
+        if context.completed:
+            print(
+                "All execution steps completed."
+            )
+
+            self.voice_manager.speak(
+                "Task completed."
+            )
+
+            return
+
+        failed_steps = [
+            step
+            for step in context.steps
+            if step.status == "FAILED"
+        ]
+
+        if failed_steps:
+            failed = failed_steps[-1]
+
+            print(
+                f"Execution failed at step "
+                f"{failed.index} "
+                f"after {failed.attempts} attempts: "
+                f"{failed.error}"
+            )
+
+            self.voice_manager.speak(
+                "I could not complete that task."
+            )
+
+            return
+
+        self.voice_manager.speak(
+            "The task did not complete."
         )
 
     def run_once(self) -> None:

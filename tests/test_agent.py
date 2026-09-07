@@ -97,10 +97,10 @@ def test_agent_handles_verification_failure():
 
     agent.process_text("Open Notepad")
 
-    assert application_verifier.verify.call_count == 3
+    assert application_verifier.verify.call_count == 6
 
     voice_manager.speak.assert_called_with(
-        "I could not complete that action."
+        "I could not complete that task."
     )
 
 

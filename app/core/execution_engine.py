@@ -1,0 +1,155 @@
+from typing import Callable
+
+from app.core.execution import (
+    ExecutionContext,
+    ExecutionStep,
+)
+from app.intelligence.action import Action
+from app.intelligence.task import Task
+
+
+class ExecutionEngine:
+    """
+    Executes tasks using a bounded observe/act/verify/recover loop.
+
+    The engine itself does not know how a computer action works.
+    Those responsibilities remain injected through callbacks.
+
+    Recovery is intentionally simple at this stage:
+    a failed action can be retried a limited number of times.
+
+    More advanced recovery and replanning will be added later.
+    """
+
+    def __init__(
+        self,
+        execute_action: Callable[[Action], Action],
+        verify_action: Callable[[Action], None],
+        max_retries: int = 1,
+    ):
+        if max_retries < 0:
+            raise ValueError(
+                "max_retries cannot be negative."
+            )
+
+        self.execute_action = execute_action
+        self.verify_action = verify_action
+        self.max_retries = max_retries
+
+    def run(
+        self,
+        task: Task,
+    ) -> ExecutionContext:
+        """
+        Execute every task action sequentially.
+
+        A failed action is retried up to max_retries times.
+        The task stops only after all recovery attempts fail.
+        """
+
+        context = ExecutionContext(
+            goal=task.goal,
+            total_steps=task.total_actions,
+        )
+
+        for action in task.actions:
+            context.current_step += 1
+
+            step = context.add_step(
+                action
+            )
+
+            self._run_step(
+                step,
+                context,
+            )
+
+            if step.status == "FAILED":
+                break
+
+        return context
+
+    def _run_step(
+        self,
+        step: ExecutionStep,
+        context: ExecutionContext,
+    ) -> None:
+        """Execute one action with bounded recovery."""
+
+        total_attempts = (
+            self.max_retries + 1
+        )
+
+        for attempt in range(
+            1,
+            total_attempts + 1,
+        ):
+            step.attempts = attempt
+            step.status = "RUNNING"
+            step.error = None
+
+            try:
+                print(
+                    f"Action attempt "
+                    f"{attempt}/{total_attempts}: "
+                    f"{step.action.action_type}"
+                )
+
+                executed_action = (
+                    self.execute_action(
+                        step.action
+                    )
+                )
+
+                self.verify_action(
+                    executed_action
+                )
+
+                self._copy_execution_result(
+                    step,
+                    executed_action,
+                )
+
+                context.mark_completed(
+                    step,
+                    verification={
+                        "success": True,
+                        "attempt": attempt,
+                    },
+                )
+
+                return
+
+            except Exception as error:
+                step.error = str(error)
+
+                print(
+                    f"Action attempt failed: "
+                    f"{error}"
+                )
+
+                if attempt < total_attempts:
+                    context.mark_recovering(
+                        step
+                    )
+
+                    print(
+                        "Attempting recovery..."
+                    )
+
+        context.mark_failed(
+            step,
+            step.error or "Unknown execution error.",
+        )
+
+    def _copy_execution_result(
+        self,
+        step: ExecutionStep,
+        action: Action,
+    ) -> None:
+        """Preserve the action execution result."""
+
+        if action.execution_result:
+            step.verification.update(
+                action.execution_result
+            )

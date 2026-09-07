@@ -4,6 +4,10 @@ from app.intelligence.intent import Intent
 from app.intelligence.mode_router import ModeRouter
 from app.intelligence.planner import Planner
 from app.intelligence.task import Task
+from app.intelligence.action_factory import ActionFactory
+from app.intelligence.task_decomposer import (
+    RuleBasedTaskDecomposer,
+)
 
 
 def test_action_creation():
@@ -175,4 +179,119 @@ def test_planner_adds_screen_text_verification():
     assert (
         verification["text"]
         == "Hello World"
+    )
+
+
+def test_rule_based_task_decomposer_creates_multi_step_task():
+    decomposer = RuleBasedTaskDecomposer()
+
+    actions = decomposer.decompose(
+        "open notepad and type hello world"
+    )
+
+    assert len(actions) == 2
+
+    assert (
+        actions[0].action_type
+        == ActionType.LAUNCH_APPLICATION
+    )
+
+    assert (
+        actions[1].action_type
+        == ActionType.TYPE_TEXT
+    )
+
+    assert actions[1].value == "Hello World"
+
+
+def test_planner_uses_injected_task_decomposer():
+    class FakeDecomposer:
+        def decompose(
+            self,
+            goal,
+            mode,
+        ):
+            return [
+                ActionFactory.speak(
+                    "Fake planned action."
+                )
+            ]
+
+    planner = Planner(
+        decomposer=FakeDecomposer()
+    )
+
+    intent = Intent(
+        raw_text="do something",
+        goal="do something",
+    )
+
+    task = planner.create_task(
+        intent
+    )
+
+    assert task.total_actions == 1
+
+    assert (
+        task.actions[0].action_type
+        == ActionType.SPEAK
+    )
+
+    assert (
+        task.actions[0].value
+        == "Fake planned action."
+    )
+
+
+def test_rule_based_decomposer_supports_show_me_how():
+    decomposer = RuleBasedTaskDecomposer()
+
+    actions = decomposer.decompose(
+        "open notepad",
+        mode=AssistantMode.SHOW_ME_HOW,
+    )
+
+    assert len(actions) == 4
+
+    assert (
+        actions[0].action_type
+        == ActionType.SPEAK
+    )
+
+    assert (
+        actions[1].action_type
+        == ActionType.PRESS_KEY
+    )
+
+    assert (
+        actions[2].action_type
+        == ActionType.TYPE_TEXT
+    )
+
+    assert (
+        actions[3].action_type
+        == ActionType.CLICK
+    )
+
+
+def test_show_me_how_type_action_has_text_verification():
+    decomposer = RuleBasedTaskDecomposer()
+
+    actions = decomposer.decompose(
+        "open notepad",
+        mode=AssistantMode.SHOW_ME_HOW,
+    )
+
+    verification = (
+        actions[2].verification
+    )
+
+    assert (
+        verification["type"]
+        == "SCREEN_CONTAINS_TEXT"
+    )
+
+    assert (
+        verification["text"]
+        == "Notepad"
     )
