@@ -61,11 +61,34 @@ def test_replanner_recovers_click_when_target_exists():
     )
 
     assert len(actions) == 1
+
+    replacement = actions[0]
+
     assert (
-        actions[0].action_type
+        replacement.action_type
         == ActionType.CLICK
     )
-    assert actions[0].target == "Notepad"
+
+    assert replacement.target == "Notepad"
+
+    assert replacement.resolved
+
+    assert replacement.parameters["x"] == 150
+    assert replacement.parameters["y"] == 120
+
+    assert (
+        replacement.parameters[
+            "grounding_score"
+        ]
+        >= 0.65
+    )
+
+    assert (
+        replacement.metadata[
+            "recovery"
+        ]
+        is True
+    )
 
 
 def test_replanner_returns_nothing_when_target_missing():
@@ -109,7 +132,7 @@ def test_replanner_returns_nothing_when_target_missing():
     assert actions == []
 
 
-def test_replanner_recovers_double_click_as_click():
+def test_replanner_recovers_double_click():
 
     replanner = RuleBasedReplanner()
 
@@ -149,11 +172,18 @@ def test_replanner_recovers_double_click_as_click():
     )
 
     assert len(actions) == 1
+
+    replacement = actions[0]
+
     assert (
-        actions[0].action_type
-        == ActionType.CLICK
+        replacement.action_type
+        == ActionType.DOUBLE_CLICK
     )
-    assert actions[0].target == "Document"
+
+    assert replacement.resolved
+
+    assert replacement.parameters["x"] == 260
+    assert replacement.parameters["y"] == 220
 
 
 def test_replanner_recovers_type_text_when_screen_has_elements():
@@ -195,11 +225,22 @@ def test_replanner_recovers_type_text_when_screen_has_elements():
     )
 
     assert len(actions) == 1
+
+    replacement = actions[0]
+
     assert (
-        actions[0].action_type
+        replacement.action_type
         == ActionType.TYPE_TEXT
     )
-    assert actions[0].value == "Hello"
+
+    assert replacement.value == "Hello"
+
+    assert (
+        replacement.metadata[
+            "recovery"
+        ]
+        is True
+    )
 
 
 def test_replanner_stops_when_observation_failed():

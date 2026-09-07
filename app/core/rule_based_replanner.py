@@ -4,18 +4,27 @@ from app.core.replanner import Replanner
 from app.intelligence.action import Action, ActionType
 from app.intelligence.action_factory import ActionFactory
 from app.intelligence.task import Task
+from app.perception.grounding import UIGrounder
 
 
 class RuleBasedReplanner(Replanner):
     """
     Deterministic replanner used during development.
 
-    The replanner examines the current screen observation
-    and attempts to recover simple UI actions.
-
-    This provides a model-independent recovery mechanism
-    before an LLM-backed replanner is introduced.
+    Recovery decisions are based on the current screen
+    observation and the existing AURA grounding system.
     """
+
+    MIN_GROUNDING_SCORE = 0.65
+
+    def __init__(
+        self,
+        grounder: UIGrounder | None = None,
+    ):
+        self.grounder = (
+            grounder
+            or UIGrounder()
+        )
 
     def replan(
         self,
@@ -25,8 +34,8 @@ class RuleBasedReplanner(Replanner):
         observation: ScreenObservation,
     ) -> list[Action]:
         """
-        Generate replacement actions based on the
-        current screen observation.
+        Generate replacement actions using the current
+        screen observation.
         """
 
         if observation.metadata.get(
@@ -58,17 +67,28 @@ class RuleBasedReplanner(Replanner):
         failed_action: Action,
         observation: ScreenObservation,
     ) -> list[Action]:
-        """Attempt to recover a failed click."""
+        """Recover a failed click using UI grounding."""
 
         target = failed_action.target
 
         if not target:
             return []
 
-        element = self._find_matching_element(
+        result = self.grounder.ground(
+            observation.elements,
             target,
-            observation,
         )
+
+        if not result.found:
+            return []
+
+        if (
+            result.score
+            < self.MIN_GROUNDING_SCORE
+        ):
+            return []
+
+        element = result.element
 
         if element is None:
             return []
@@ -76,20 +96,54 @@ class RuleBasedReplanner(Replanner):
         if failed_action.action_type == (
             ActionType.DOUBLE_CLICK
         ):
-            replacement = ActionFactory.click(
+            replacement = Action(
+                action_type=ActionType.DOUBLE_CLICK,
                 target=target,
                 description=(
-                    f"Recovery click for {target}"
+                    f"Grounded recovery double-click "
+                    f"for {target}"
                 ),
+                parameters={
+                    "x": element.center[0],
+                    "y": element.center[1],
+                    "width": element.width,
+                    "height": element.height,
+                    "grounding_score": result.score,
+                    "grounding_reason": result.reason,
+                },
+                metadata={
+                    "recovery": True,
+                    "recovery_strategy": (
+                        "grounded_target"
+                    ),
+                },
+                resolved=True,
             )
 
             return [replacement]
 
-        replacement = ActionFactory.click(
+        replacement = Action(
+            action_type=ActionType.CLICK,
             target=target,
             description=(
-                f"Retry click for {target}"
+                f"Grounded recovery click "
+                f"for {target}"
             ),
+            parameters={
+                "x": element.center[0],
+                "y": element.center[1],
+                "width": element.width,
+                "height": element.height,
+                "grounding_score": result.score,
+                "grounding_reason": result.reason,
+            },
+            metadata={
+                "recovery": True,
+                "recovery_strategy": (
+                    "grounded_target"
+                ),
+            },
+            resolved=True,
         )
 
         return [replacement]
@@ -102,8 +156,8 @@ class RuleBasedReplanner(Replanner):
         """
         Attempt to recover a failed text-entry action.
 
-        A generic retry is allowed only when the current
-        screen still contains detectable UI elements.
+        Generic text retry is permitted only when the
+        screen still appears usable.
         """
 
         if failed_action.value is None:
@@ -119,75 +173,20 @@ class RuleBasedReplanner(Replanner):
         if not observation.elements:
             return []
 
-        return [
-            ActionFactory.type_text(
-                text,
-                description=(
-                    f"Recovery type: {text}"
-                ),
-            )
-        ]
-
-    @staticmethod
-    def _find_matching_element(
-        target: str,
-        observation: ScreenObservation,
-    ):
-        """
-        Find a UI element whose text or description
-        matches the failed action target.
-        """
-
-        normalized_target = (
-            target.strip().lower()
+        replacement = ActionFactory.type_text(
+            text,
+            description=(
+                f"Grounded recovery type: {text}"
+            ),
         )
 
-        if not normalized_target:
-            return None
-
-        exact_match = None
-        partial_match = None
-
-        for element in observation.elements:
-
-            candidates = [
-                element.text,
-                element.description,
-                element.attributes.get(
-                    "name"
+        replacement.metadata.update(
+            {
+                "recovery": True,
+                "recovery_strategy": (
+                    "text_retry"
                 ),
-                element.attributes.get(
-                    "label"
-                ),
-            ]
-
-            for candidate in candidates:
-                if not candidate:
-                    continue
-
-                normalized_candidate = (
-                    str(candidate)
-                    .strip()
-                    .lower()
-                )
-
-                if (
-                    normalized_candidate
-                    == normalized_target
-                ):
-                    exact_match = element
-                    break
-
-                if (
-                    normalized_target
-                    in normalized_candidate
-                ):
-                    partial_match = element
-
-            if exact_match is not None:
-                break
-
-        return (
-            exact_match
-            or partial_match
+            }
         )
+
+        return [replacement]
