@@ -9,17 +9,8 @@ from app.intelligence.task import Task
 
 class Replanner(ABC):
     """
-    Abstract interface for recovering from failed actions.
-
-    A future LLM-backed implementation can inspect:
-
-    - the original task
-    - execution history
-    - current screen observation
-    - failed action
-    - structured failure information
-
-    and produce a new action sequence.
+    Interface for generating replacement actions after
+    an action fails.
     """
 
     @abstractmethod
@@ -29,14 +20,21 @@ class Replanner(ABC):
         context: ExecutionContext,
         failed_action: Action,
         observation: ScreenObservation,
-        failure: FailureInfo,
+        failure: FailureInfo | None = None,
     ) -> list[Action]:
+        """
+        Generate replacement actions.
+
+        `failure` is optional for backward compatibility with
+        older replanners while the recovery architecture is
+        being upgraded.
+        """
         raise NotImplementedError
 
 
 class NoOpReplanner(Replanner):
     """
-    Development replanner that performs no replanning.
+    Default replanner that performs no recovery.
     """
 
     def replan(
@@ -45,6 +43,6 @@ class NoOpReplanner(Replanner):
         context: ExecutionContext,
         failed_action: Action,
         observation: ScreenObservation,
-        failure: FailureInfo,
+        failure: FailureInfo | None = None,
     ) -> list[Action]:
         return []

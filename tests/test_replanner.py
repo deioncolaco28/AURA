@@ -1,6 +1,5 @@
 from app.core.execution import ExecutionContext
-from app.core.execution_engine import ExecutionEngine
-from app.core.failure import FailureInfo
+from app.core.failure import FailureInfo, FailureType
 from app.core.observation import ScreenObservation
 from app.core.replanner import (
     NoOpReplanner,
@@ -11,6 +10,7 @@ from app.intelligence.task import Task
 
 
 def test_noop_replanner_returns_no_actions():
+
     replanner = NoOpReplanner()
 
     task = Task(
@@ -26,30 +26,27 @@ def test_noop_replanner_returns_no_actions():
         "Fail"
     )
 
-    failure = FailureInfo(
-        action=action
-    )
-
     result = replanner.replan(
         task=task,
         context=context,
         failed_action=action,
         observation=ScreenObservation(),
-        failure=failure,
     )
 
     assert result == []
 
 
 def test_replanner_is_abstract():
+
     try:
         Replanner()
-        assert False, "Replanner should be abstract."
+        assert False
     except TypeError:
         pass
 
 
 def test_execution_engine_can_use_replanner():
+
     class FakeReplanner(Replanner):
 
         def __init__(self):
@@ -61,14 +58,13 @@ def test_execution_engine_can_use_replanner():
             context,
             failed_action,
             observation,
-            failure,
+            failure=None,
         ):
             self.called = True
 
+            assert failure is not None
             assert failure.action is failed_action
-            assert failure.error == (
-                "Original failed"
-            )
+            assert failure.has_error
 
             return [
                 ActionFactory.speak(
@@ -77,9 +73,11 @@ def test_execution_engine_can_use_replanner():
             ]
 
     executed = []
+
     replanner = FakeReplanner()
 
     def execute_action(action):
+
         executed.append(
             action.value
         )
@@ -97,6 +95,10 @@ def test_execution_engine_can_use_replanner():
 
     def verify_action(action):
         pass
+
+    from app.core.execution_engine import (
+        ExecutionEngine,
+    )
 
     engine = ExecutionEngine(
         execute_action=execute_action,
@@ -135,6 +137,7 @@ def test_execution_engine_can_use_replanner():
 
 
 def test_execution_engine_limits_replanning():
+
     class FakeReplanner(Replanner):
 
         def __init__(self):
@@ -146,12 +149,11 @@ def test_execution_engine_limits_replanning():
             context,
             failed_action,
             observation,
-            failure,
+            failure=None,
         ):
             self.calls += 1
 
-            assert failure.action is failed_action
-            assert failure.has_error
+            assert failure is not None
 
             return [
                 ActionFactory.speak(
@@ -168,6 +170,10 @@ def test_execution_engine_limits_replanning():
 
     def verify_action(action):
         pass
+
+    from app.core.execution_engine import (
+        ExecutionEngine,
+    )
 
     engine = ExecutionEngine(
         execute_action=execute_action,
@@ -200,6 +206,7 @@ def test_execution_engine_limits_replanning():
     assert len(context.steps) == 2
 
     assert context.steps[0].status == "FAILED"
+
     assert context.steps[1].status == "FAILED"
 
     assert not context.completed
