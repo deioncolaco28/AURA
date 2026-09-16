@@ -5,6 +5,7 @@ from app.intelligence.action import Action, ActionType
 from app.intelligence.intent_parser import IntentParser
 from app.intelligence.mode_router import ModeRouter
 from app.intelligence.planner import Planner
+from app.logging.logger import AURALogger
 
 
 class Agent:
@@ -44,6 +45,7 @@ class Agent:
         action_executor=None,
         application_verifier=None,
         screen_verifier=None,
+        logger=None,
     ):
         self.intent_parser = intent_parser or IntentParser()
         self.mode_router = mode_router or ModeRouter()
@@ -52,6 +54,7 @@ class Agent:
         self.action_executor = action_executor
         self.application_verifier = application_verifier
         self.screen_verifier = screen_verifier
+        self.logger = logger or AURALogger()
 
         if execution_engine is not None:
             self.execution_engine = execution_engine
@@ -68,6 +71,8 @@ class Agent:
         if not text or not text.strip():
             raise ValueError("User input cannot be empty.")
 
+        self.logger.command_received(text)
+
         print(f"\nUser command: {text}")
 
         self.state.current_state = (
@@ -79,6 +84,12 @@ class Agent:
         print(f"Mode: {intent.mode}")
         print(f"Goal: {intent.goal}")
         print(f"Risk: {intent.risk_level}")
+
+        self.logger.intent_detected(
+            goal=intent.goal,
+            mode=intent.mode,
+            risk=intent.risk_level,
+        )
 
         if intent.requires_confirmation:
             print(
@@ -145,6 +156,10 @@ class Agent:
                 AssistantState.COMPLETED
             )
 
+            self.logger.task_completed(
+                intent.goal
+            )
+
             print(
                 "\nTask completed successfully."
             )
@@ -156,6 +171,10 @@ class Agent:
         else:
             self.state.current_state = (
                 AssistantState.FAILED
+            )
+
+            self.logger.task_failed(
+                intent.goal
             )
 
             print(
