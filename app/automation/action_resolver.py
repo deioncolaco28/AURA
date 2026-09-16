@@ -1,21 +1,18 @@
 from app.intelligence.action import Action, ActionType
 from app.perception.grounding import UIGrounder
-from app.perception.perception_result import (
-    PerceptionResult,
-)
+from app.perception.perception_result import PerceptionResult
 
 
 class ActionResolver:
     """Resolves abstract UI actions into concrete coordinates."""
 
+    MIN_GROUNDING_SCORE = 0.65
+
     def __init__(
         self,
         grounder: UIGrounder | None = None,
     ):
-        self.grounder = (
-            grounder
-            or UIGrounder()
-        )
+        self.grounder = grounder or UIGrounder()
 
     def resolve(
         self,
@@ -47,7 +44,7 @@ class ActionResolver:
                 f"{action.target}"
             )
 
-        if result.score < 0.65:
+        if result.score < self.MIN_GROUNDING_SCORE:
             raise LookupError(
                 f"UI target confidence too low: "
                 f"{action.target} "
@@ -64,6 +61,11 @@ class ActionResolver:
                 "height": element.height,
                 "grounding_score": result.score,
                 "grounding_reason": result.reason,
+                "grounding_source": getattr(
+                    element,
+                    "source",
+                    None,
+                ),
             }
         )
 

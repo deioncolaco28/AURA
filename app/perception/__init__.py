@@ -29,6 +29,11 @@ from app.perception.vlm_adapter import (
     StructuredVLMAdapter,
     VLMResponseParser,
 )
+from app.perception.vlm_adapter import (
+    ProviderVLM,
+    StructuredVLMAdapter,
+    VLMResponseParser,
+)
 
 
 __all__ = [
@@ -47,4 +52,5 @@ __all__ = [
     "VLMElement",
     "VLMResponseParser",
     "VLMResult",
+    "ProviderVLM",
 ]

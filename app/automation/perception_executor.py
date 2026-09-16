@@ -1,22 +1,10 @@
-from app.automation.action_executor import (
-    ActionExecutor,
-)
-from app.automation.action_resolver import (
-    ActionResolver,
-)
-from app.intelligence.action import (
-    Action,
-    ActionType,
-)
-from app.perception.ocr import (
-    TesseractOCR,
-)
-from app.perception.perception_manager import (
-    PerceptionManager,
-)
-from app.perception.screenshot import (
-    ScreenshotCapture,
-)
+from app.automation.action_executor import ActionExecutor
+from app.automation.action_resolver import ActionResolver
+from app.intelligence.action import Action, ActionType
+from app.perception.ocr import TesseractOCR
+from app.perception.perception_manager import PerceptionManager
+from app.perception.screenshot import ScreenshotCapture
+from app.perception.vlm import VLM
 
 
 class PerceptionExecutor:
@@ -27,15 +15,18 @@ class PerceptionExecutor:
 
         Screenshot
             ↓
-        OCR / VLM
+        OCR + VLM
             ↓
         PerceptionResult
             ↓
         Grounding
             ↓
-        Coordinates
+        Confidence check
             ↓
         Atomic execution
+
+    If grounding fails, the screen is captured again and
+    perception is repeated before the action is rejected.
     """
 
     UI_ACTION_TYPES = (
@@ -50,45 +41,45 @@ class PerceptionExecutor:
         perception_manager: PerceptionManager | None = None,
         action_resolver: ActionResolver | None = None,
         screenshot_capture: ScreenshotCapture | None = None,
+        vlm: VLM | None = None,
+        max_perception_attempts: int = 2,
     ):
         self.action_executor = (
-            action_executor
-            or ActionExecutor()
+            action_executor or ActionExecutor()
         )
 
         self.screenshot_capture = (
-            screenshot_capture
-            or ScreenshotCapture()
+            screenshot_capture or ScreenshotCapture()
         )
 
-        self.perception_manager = (
-            perception_manager
-            or PerceptionManager(
-                ocr=TesseractOCR()
+        if perception_manager is not None:
+            self.perception_manager = perception_manager
+        else:
+            self.perception_manager = PerceptionManager(
+                ocr=TesseractOCR(),
+                vlm=vlm,
             )
-        )
 
         self.action_resolver = (
-            action_resolver
-            or ActionResolver()
+            action_resolver or ActionResolver()
         )
 
-    def execute(
-        self,
-        action: Action,
-    ) -> Action:
-        """
-        Perceive, resolve, and execute one action.
-        """
-
-        if action.action_type in self.UI_ACTION_TYPES:
-            return self._execute_ui_action(
-                action
+        if max_perception_attempts < 1:
+            raise ValueError(
+                "max_perception_attempts must be at least 1."
             )
 
-        self.action_executor.execute(
-            action
+        self.max_perception_attempts = (
+            max_perception_attempts
         )
+
+    def execute(self, action: Action) -> Action:
+        """Perceive, resolve, and execute one action."""
+
+        if action.action_type in self.UI_ACTION_TYPES:
+            return self._execute_ui_action(action)
+
+        self.action_executor.execute(action)
 
         action.execution_result = {
             "success": True,
@@ -97,82 +88,109 @@ class PerceptionExecutor:
 
         return action
 
-    def _execute_ui_action(
-        self,
-        action: Action,
-    ) -> Action:
+    def _execute_ui_action(self, action: Action) -> Action:
         if not action.target:
             raise ValueError(
                 "UI action requires a target."
             )
 
-        image = (
-            self.screenshot_capture.capture()
-        )
+        last_error = None
 
-        instruction = (
-            action.description
-            or action.target
-        )
+        for attempt in range(
+            1,
+            self.max_perception_attempts + 1,
+        ):
+            try:
+                print(
+                    f"Perception attempt "
+                    f"{attempt}/"
+                    f"{self.max_perception_attempts}"
+                )
 
-        perception = (
-            self.perception_manager.analyze(
-                image,
-                instruction=instruction,
-            )
-        )
+                image = self.screenshot_capture.capture()
 
-        print(
-            f"Perception sources: "
-            f"{perception.sources_used}"
-        )
+                instruction = (
+                    action.description
+                    or action.target
+                )
 
-        print(
-            f"Detected UI elements: "
-            f"{len(perception.elements)}"
-        )
+                perception = (
+                    self.perception_manager.analyze(
+                        image,
+                        instruction=instruction,
+                    )
+                )
 
-        if perception.screen_description:
-            print(
-                f"Screen: "
-                f"{perception.screen_description}"
-            )
+                print(
+                    f"Perception sources: "
+                    f"{perception.sources_used}"
+                )
 
-        action = (
-            self.action_resolver.resolve(
-                action,
-                perception,
-            )
-        )
+                print(
+                    f"Detected UI elements: "
+                    f"{len(perception.elements)}"
+                )
 
-        print(
-            f"Resolved target: "
-            f"{action.target}"
-        )
+                action = self.action_resolver.resolve(
+                    action,
+                    perception,
+                )
 
-        print(
-            f"Resolved coordinates: "
-            f"({action.parameters['x']}, "
-            f"{action.parameters['y']})"
-        )
+                print(
+                    f"Resolved target: "
+                    f"{action.target}"
+                )
 
-        print(
-            f"Grounding score: "
-            f"{action.parameters['grounding_score']:.2f}"
-        )
+                print(
+                    f"Resolved coordinates: "
+                    f"({action.parameters['x']}, "
+                    f"{action.parameters['y']})"
+                )
 
-        self.action_executor.execute(
-            action
-        )
+                print(
+                    f"Grounding score: "
+                    f"{action.parameters['grounding_score']:.2f}"
+                )
 
-        action.execution_result = {
-            "success": True,
-            "execution_mode": "perception",
-            "grounding_score": (
-                action.parameters[
-                    "grounding_score"
-                ]
-            ),
-        }
+                self.action_executor.execute(action)
 
-        return action
+                action.execution_result = {
+                    "success": True,
+                    "execution_mode": "perception",
+                    "perception_attempt": attempt,
+                    "grounding_score": (
+                        action.parameters[
+                            "grounding_score"
+                        ]
+                    ),
+                    "grounding_source": (
+                        action.parameters.get(
+                            "grounding_source"
+                        )
+                    ),
+                    "perception_sources": (
+                        perception.sources_used
+                    ),
+                }
+
+                return action
+
+            except (LookupError, ValueError) as error:
+                last_error = error
+
+                print(
+                    f"Perception attempt {attempt} "
+                    f"failed: {error}"
+                )
+
+                if attempt < self.max_perception_attempts:
+                    print(
+                        "Screen will be perceived again."
+                    )
+
+        raise LookupError(
+            f"Unable to reliably ground "
+            f"'{action.target}' after "
+            f"{self.max_perception_attempts} "
+            f"perception attempts."
+        ) from last_error

@@ -1,280 +1,215 @@
 import json
-from typing import Any
+from typing import Any, Callable
 
-from app.perception.vlm import (
-    VLM,
-    VLMElement,
-    VLMResult,
-)
+from app.perception.vlm import VLM, VLMElement, VLMResult
 
 
 class VLMResponseParser:
-    """
-    Validates and converts raw structured VLM responses
-    into AURA VLMResult objects.
-    """
-
-    REQUIRED_ELEMENT_FIELDS = (
+    REQUIRED_FIELDS = {
         "element_type",
         "description",
         "x",
         "y",
         "width",
         "height",
-    )
+        "confidence",
+    }
 
-    def parse(
-        self,
-        response: Any,
-    ) -> VLMResult:
-        data = self._normalize_response(response)
+    def parse(self, response: dict[str, Any] | str) -> VLMResult:
+        if isinstance(response, str):
+            try:
+                response = json.loads(response)
+            except json.JSONDecodeError as error:
+                raise ValueError("VLM response is not valid JSON.") from error
 
-        if not isinstance(data, dict):
-            raise ValueError(
-                "VLM response must be a JSON object."
-            )
+        if not isinstance(response, dict):
+            raise TypeError("VLM response must be a dictionary or JSON string.")
 
-        raw_elements = data.get(
-            "elements",
-            [],
-        )
+        raw_elements = response.get("elements")
 
         if not isinstance(raw_elements, list):
             raise ValueError(
-                "VLM 'elements' must be a list."
+                "VLM response must contain an 'elements' list."
             )
 
-        elements = []
+        elements: list[VLMElement] = []
 
-        for index, raw_element in enumerate(
-            raw_elements
-        ):
+        for index, raw_element in enumerate(raw_elements):
+            if not isinstance(raw_element, dict):
+                raise ValueError(
+                    f"VLM element {index} must be an object."
+                )
+
+            missing = self.REQUIRED_FIELDS - set(raw_element.keys())
+
+            if missing:
+                raise ValueError(
+                    f"VLM element {index} is missing required fields: "
+                    f"{sorted(missing)}"
+                )
+
+            try:
+                x = int(raw_element["x"])
+                y = int(raw_element["y"])
+                width = int(raw_element["width"])
+                height = int(raw_element["height"])
+                confidence = float(raw_element["confidence"])
+            except (TypeError, ValueError, KeyError) as error:
+                raise ValueError(
+                    f"Invalid VLM element {index}: {raw_element}"
+                ) from error
+
+            confidence = max(0.0, min(1.0, confidence))
+
+            attributes = raw_element.get("attributes", {})
+
+            if not isinstance(attributes, dict):
+                attributes = {}
+
             elements.append(
-                self._parse_element(
-                    raw_element,
-                    index,
+                VLMElement(
+                    element_type=str(raw_element["element_type"]),
+                    description=str(raw_element["description"]),
+                    text=str(raw_element.get("text", "")),
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height,
+                    confidence=confidence,
+                    element_id=str(
+                        raw_element.get(
+                            "element_id",
+                            f"vlm-{index}",
+                        )
+                    ),
+                    attributes=attributes,
                 )
             )
 
-        description = data.get(
-            "screen_description",
-            data.get("description", ""),
+        description = response.get(
+            "description",
+            response.get("screen_description", ""),
         )
 
-        if description is None:
-            description = ""
+        try:
+            overall_confidence = float(
+                response.get("confidence", 0.0)
+            )
+        except (TypeError, ValueError):
+            overall_confidence = 0.0
+
+        metadata = response.get("metadata", {})
+
+        if not isinstance(metadata, dict):
+            metadata = {}
 
         return VLMResult(
             elements=elements,
             description=str(description),
-            raw_response=response,
-        )
-
-    def _parse_element(
-        self,
-        data: Any,
-        index: int,
-    ) -> VLMElement:
-        if not isinstance(data, dict):
-            raise ValueError(
-                f"VLM element {index} must be an object."
-            )
-
-        missing = [
-            field
-            for field in self.REQUIRED_ELEMENT_FIELDS
-            if field not in data
-        ]
-
-        if missing:
-            raise ValueError(
-                f"VLM element {index} is missing fields: "
-                f"{', '.join(missing)}"
-            )
-
-        element_type = str(
-            data["element_type"]
-        ).strip()
-
-        description = str(
-            data["description"]
-        ).strip()
-
-        if not element_type:
-            raise ValueError(
-                f"VLM element {index} has an empty "
-                f"element_type."
-            )
-
-        if not description:
-            raise ValueError(
-                f"VLM element {index} has an empty "
-                f"description."
-            )
-
-        x = self._coordinate(
-            data["x"],
-            "x",
-            index,
-        )
-
-        y = self._coordinate(
-            data["y"],
-            "y",
-            index,
-        )
-
-        width = self._dimension(
-            data["width"],
-            "width",
-            index,
-        )
-
-        height = self._dimension(
-            data["height"],
-            "height",
-            index,
-        )
-
-        confidence = self._confidence(
-            data.get("confidence", 0.0)
-        )
-
-        text = data.get("text")
-
-        if text is not None:
-            text = str(text).strip() or None
-
-        attributes = data.get(
-            "attributes",
-            {},
-        )
-
-        if not isinstance(attributes, dict):
-            attributes = {}
-
-        return VLMElement(
-            element_type=element_type,
-            description=description,
-            x=x,
-            y=y,
-            width=width,
-            height=height,
-            confidence=confidence,
-            text=text,
-            attributes=attributes,
-        )
-
-    def _coordinate(
-        self,
-        value: Any,
-        name: str,
-        index: int,
-    ) -> int:
-        try:
-            value = float(value)
-        except (TypeError, ValueError):
-            raise ValueError(
-                f"VLM element {index} has invalid "
-                f"{name} coordinate."
-            )
-
-        if value < 0:
-            raise ValueError(
-                f"VLM element {index} has negative "
-                f"{name} coordinate."
-            )
-
-        return int(round(value))
-
-    def _dimension(
-        self,
-        value: Any,
-        name: str,
-        index: int,
-    ) -> int:
-        try:
-            value = float(value)
-        except (TypeError, ValueError):
-            raise ValueError(
-                f"VLM element {index} has invalid "
-                f"{name} dimension."
-            )
-
-        if value <= 0:
-            raise ValueError(
-                f"VLM element {index} has invalid "
-                f"{name} dimension."
-            )
-
-        return int(round(value))
-
-    def _confidence(
-        self,
-        value: Any,
-    ) -> float:
-        try:
-            confidence = float(value)
-        except (TypeError, ValueError):
-            confidence = 0.0
-
-        return max(
-            0.0,
-            min(1.0, confidence),
-        )
-
-    def _normalize_response(
-        self,
-        response: Any,
-    ) -> Any:
-        if isinstance(response, dict):
-            return response
-
-        if isinstance(response, str):
-            try:
-                return json.loads(response)
-            except json.JSONDecodeError as error:
-                raise ValueError(
-                    "VLM response is not valid JSON."
-                ) from error
-
-        raise ValueError(
-            "Unsupported VLM response type."
+            model_name=str(response.get("model_name", "")),
+            confidence=overall_confidence,
+            metadata=metadata,
         )
 
 
 class StructuredVLMAdapter(VLM):
     """
-    Adapter for a VLM provider that returns structured JSON.
+    Adapter for VLM providers that return structured JSON-compatible data.
 
-    The actual model/provider is intentionally injected through
-    the analyze_callable so AURA does not depend on one provider.
+    The callable receives:
+        image
+        instruction
+
+    and must return either:
+        dict
+        or
+        JSON string
     """
 
     def __init__(
         self,
-        analyze_callable,
+        analyze_callable: Callable | None = None,
         parser: VLMResponseParser | None = None,
     ):
         self.analyze_callable = analyze_callable
-        self.parser = (
-            parser
-            or VLMResponseParser()
-        )
+        self.parser = parser or VLMResponseParser()
 
     def analyze(
         self,
         image,
         instruction: str | None = None,
     ) -> VLMResult:
+
         if self.analyze_callable is None:
-            raise RuntimeError(
-                "No VLM analyze callable is configured."
+            return VLMResult(
+                elements=[],
+                description="",
+                model_name="structured-adapter",
             )
 
         response = self.analyze_callable(
+            image,
+            instruction,
+        )
+
+        return self.parser.parse(response)
+
+
+class ProviderVLM(VLM):
+    """
+    Production-facing VLM adapter.
+
+    AURA does not depend on a specific VLM vendor or SDK.
+
+    The provider callable is responsible only for communicating
+    with the selected vision model.
+
+    AURA remains responsible for:
+        provider response parsing
+        validation
+        grounding
+        action selection
+    """
+
+    def __init__(
+        self,
+        provider: Callable,
+        model_name: str = "external-vlm",
+        parser: VLMResponseParser | None = None,
+    ):
+        if not callable(provider):
+            raise TypeError(
+                "VLM provider must be callable."
+            )
+
+        self.provider = provider
+        self.model_name = model_name
+        self.parser = parser or VLMResponseParser()
+
+    def analyze(
+        self,
+        image,
+        instruction: str | None = None,
+    ) -> VLMResult:
+
+        response = self.provider(
             image=image,
             instruction=instruction,
         )
 
-        return self.parser.parse(response)
+        result = self.parser.parse(response)
+
+        if not result.model_name:
+            result.model_name = self.model_name
+
+        result.metadata.setdefault(
+            "provider",
+            self.model_name,
+        )
+
+        result.metadata.setdefault(
+            "instruction",
+            instruction,
+        )
+
+        return result

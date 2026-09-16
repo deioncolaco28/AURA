@@ -1,9 +1,7 @@
-from app.perception.ocr import TesseractOCR
+from app.perception.ocr import OCR, TesseractOCR
 from app.perception.ui_element import UIElement
 from app.perception.vlm import VLM
-from app.perception.perception_result import (
-    PerceptionResult,
-)
+from app.perception.perception_result import PerceptionResult
 
 
 class PerceptionManager:
@@ -25,10 +23,11 @@ class PerceptionManager:
 
     FUSION_DISTANCE_THRESHOLD = 40
     TEXT_SIMILARITY_THRESHOLD = 0.70
+    IOU_THRESHOLD = 0.30
 
     def __init__(
         self,
-        ocr: TesseractOCR | None = None,
+        ocr: OCR | None = None,
         vlm: VLM | None = None,
     ):
         self.ocr = ocr
@@ -40,20 +39,31 @@ class PerceptionManager:
         instruction: str | None = None,
     ) -> PerceptionResult:
         """
-        Analyze an image using the configured perception sources.
+        Analyze a screenshot using the configured perception sources.
+
+        OCR provides text and coordinates.
+        VLM provides semantic understanding and visual descriptions.
+        Both sources are fused into a unified UI representation.
         """
 
         elements: list[UIElement] = []
         sources_used: list[str] = []
         screen_description = ""
 
+        # ---------------------------------------------------------
+        # OCR perception
+        # ---------------------------------------------------------
+
         if self.ocr is not None:
             ocr_elements = self._run_ocr(image)
 
-            if ocr_elements:
-                elements.extend(ocr_elements)
+            elements.extend(ocr_elements)
 
             sources_used.append("OCR")
+
+        # ---------------------------------------------------------
+        # VLM perception
+        # ---------------------------------------------------------
 
         if self.vlm is not None:
             vlm_result = self.vlm.analyze(
@@ -65,14 +75,17 @@ class PerceptionManager:
                 vlm_result.elements
             )
 
-            if vlm_elements:
-                elements.extend(vlm_elements)
+            elements.extend(vlm_elements)
 
             sources_used.append("VLM")
 
             screen_description = (
                 vlm_result.description
             )
+
+        # ---------------------------------------------------------
+        # Fusion
+        # ---------------------------------------------------------
 
         fused_elements = self._fuse_elements(
             elements
@@ -93,26 +106,28 @@ class PerceptionManager:
                     != len(fused_elements)
                 ),
                 "instruction": instruction,
+                "ocr_enabled": self.ocr is not None,
+                "vlm_enabled": self.vlm is not None,
             },
         )
+
+    # =============================================================
+    # OCR
+    # =============================================================
 
     def _run_ocr(
         self,
         image,
     ) -> list[UIElement]:
         """
-        Run OCR and convert OCR elements into UIElements.
+        Run OCR and convert OCR results into UIElements.
         """
 
-        results = self.ocr.detect_text(
-            image
-        )
+        results = self.ocr.detect_text(image)
 
-        elements = []
+        elements: list[UIElement] = []
 
-        for index, element in enumerate(
-            results
-        ):
+        for index, element in enumerate(results):
             elements.append(
                 UIElement(
                     element_id=f"ocr-{index}",
@@ -122,29 +137,40 @@ class PerceptionManager:
                     y=element.y,
                     width=element.width,
                     height=element.height,
-                    confidence=element.confidence,
+                    confidence=(
+                        self._normalize_confidence(
+                            element.confidence
+                        )
+                    ),
                     source="OCR",
                 )
             )
 
         return elements
 
+    # =============================================================
+    # VLM
+    # =============================================================
+
     def _convert_vlm_elements(
         self,
         vlm_elements,
     ) -> list[UIElement]:
         """
-        Convert VLMElement objects into UIElement objects.
+        Convert VLMElement objects into UIElements.
         """
 
-        elements = []
+        elements: list[UIElement] = []
 
-        for index, element in enumerate(
-            vlm_elements
-        ):
+        for index, element in enumerate(vlm_elements):
+            element_id = (
+                element.element_id
+                or f"vlm-{index}"
+            )
+
             elements.append(
                 UIElement(
-                    element_id=f"vlm-{index}",
+                    element_id=element_id,
                     element_type=element.element_type,
                     text=element.text,
                     description=element.description,
@@ -152,7 +178,11 @@ class PerceptionManager:
                     y=element.y,
                     width=element.width,
                     height=element.height,
-                    confidence=element.confidence,
+                    confidence=(
+                        self._normalize_confidence(
+                            element.confidence
+                        )
+                    ),
                     source="VLM",
                     attributes=dict(
                         element.attributes
@@ -161,6 +191,10 @@ class PerceptionManager:
             )
 
         return elements
+
+    # =============================================================
+    # FUSION
+    # =============================================================
 
     def _fuse_elements(
         self,
@@ -174,23 +208,20 @@ class PerceptionManager:
         fused: list[UIElement] = []
 
         for element in elements:
-
-            duplicate_index = (
-                self._find_duplicate(
-                    element,
-                    fused,
-                )
+            duplicate_index = self._find_duplicate(
+                element,
+                fused,
             )
 
             if duplicate_index is None:
                 fused.append(element)
                 continue
 
-            fused[
-                duplicate_index
-            ] = self._merge_elements(
-                fused[duplicate_index],
-                element,
+            fused[duplicate_index] = (
+                self._merge_elements(
+                    fused[duplicate_index],
+                    element,
+                )
             )
 
         return fused
@@ -201,29 +232,30 @@ class PerceptionManager:
         existing: list[UIElement],
     ) -> int | None:
         """
-        Find an existing element that represents
-        the same screen component.
+        Find an existing element representing the
+        same screen component.
         """
 
-        for index, element in enumerate(
-            existing
-        ):
+        for index, element in enumerate(existing):
 
-            if self._elements_overlap(
+            if not self._elements_overlap(
                 candidate,
                 element,
             ):
-                if self._text_matches(
-                    candidate,
-                    element,
-                ):
-                    return index
+                continue
 
-                if (
-                    candidate.source
-                    != element.source
-                ):
-                    return index
+            if self._text_matches(
+                candidate,
+                element,
+            ):
+                return index
+
+            # OCR and VLM may describe the same element
+            # differently. If their bounding regions overlap
+            # and they originate from different sources,
+            # treat them as the same UI component.
+            if candidate.source != element.source:
+                return index
 
         return None
 
@@ -235,17 +267,15 @@ class PerceptionManager:
         """
         Merge two representations of the same element.
 
-        VLM information is preferred for semantic description,
-        while OCR text is preserved when available.
+        OCR text is preserved.
+        VLM semantic descriptions are preserved.
+        Higher-confidence information becomes primary.
         """
 
         primary = first
         secondary = second
 
-        if (
-            secondary.confidence
-            > primary.confidence
-        ):
+        if secondary.confidence > primary.confidence:
             primary, secondary = (
                 secondary,
                 primary,
@@ -261,10 +291,9 @@ class PerceptionManager:
             or secondary.description
         )
 
-        element_type = (
-            primary.element_type
-            if primary.element_type != "text"
-            else secondary.element_type
+        element_type = self._select_element_type(
+            primary,
+            secondary,
         )
 
         confidence = max(
@@ -280,15 +309,23 @@ class PerceptionManager:
             primary.attributes
         )
 
-        attributes[
-            "fused_sources"
-        ] = list(
-            dict.fromkeys(
-                [
-                    first.source,
-                    second.source,
-                ]
-            )
+        fused_sources = attributes.get(
+            "fused_sources",
+            [],
+        )
+
+        if not isinstance(fused_sources, list):
+            fused_sources = []
+
+        fused_sources.extend(
+            [
+                first.source,
+                second.source,
+            ]
+        )
+
+        attributes["fused_sources"] = list(
+            dict.fromkeys(fused_sources)
         )
 
         return UIElement(
@@ -304,26 +341,57 @@ class PerceptionManager:
                 first.y,
                 second.y,
             ),
-            width=max(
-                first.x + first.width,
-                second.x + second.width,
-            )
-            - min(
-                first.x,
-                second.x,
+            width=(
+                max(
+                    first.x + first.width,
+                    second.x + second.width,
+                )
+                - min(
+                    first.x,
+                    second.x,
+                )
             ),
-            height=max(
-                first.y + first.height,
-                second.y + second.height,
-            )
-            - min(
-                first.y,
-                second.y,
+            height=(
+                max(
+                    first.y + first.height,
+                    second.y + second.height,
+                )
+                - min(
+                    first.y,
+                    second.y,
+                )
             ),
             confidence=confidence,
             source="FUSED",
             attributes=attributes,
         )
+
+    def _select_element_type(
+        self,
+        primary: UIElement,
+        secondary: UIElement,
+    ) -> str:
+        """
+        Prefer a semantic VLM element type over a generic OCR type.
+        """
+
+        generic_types = {
+            "",
+            "text",
+            "unknown",
+        }
+
+        if primary.element_type.lower() not in generic_types:
+            return primary.element_type
+
+        if secondary.element_type.lower() not in generic_types:
+            return secondary.element_type
+
+        return primary.element_type
+
+    # =============================================================
+    # GEOMETRY
+    # =============================================================
 
     def _elements_overlap(
         self,
@@ -356,62 +424,12 @@ class PerceptionManager:
         ):
             return True
 
-        return self._intersection_over_union(
-            first,
-            second,
-        ) >= 0.30
-
-    def _text_matches(
-        self,
-        first: UIElement,
-        second: UIElement,
-    ) -> bool:
-        """
-        Determine whether two elements have sufficiently
-        similar textual information.
-        """
-
-        first_text = self._normalize(
-            first.text
-        )
-
-        second_text = self._normalize(
-            second.text
-        )
-
-        if not first_text or not second_text:
-            return False
-
-        if (
-            first_text == second_text
-        ):
-            return True
-
-        first_words = set(
-            first_text.split()
-        )
-
-        second_words = set(
-            second_text.split()
-        )
-
-        if not first_words or not second_words:
-            return False
-
-        overlap = (
-            len(
-                first_words
-                & second_words
-            )
-            / len(
-                first_words
-                | second_words
-            )
-        )
-
         return (
-            overlap
-            >= self.TEXT_SIMILARITY_THRESHOLD
+            self._intersection_over_union(
+                first,
+                second,
+            )
+            >= self.IOU_THRESHOLD
         )
 
     def _intersection_over_union(
@@ -419,7 +437,9 @@ class PerceptionManager:
         first: UIElement,
         second: UIElement,
     ) -> float:
-        """Calculate bounding-box IoU."""
+        """
+        Calculate bounding-box IoU.
+        """
 
         left = max(
             first.x,
@@ -473,6 +493,65 @@ class PerceptionManager:
 
         return intersection / union
 
+    # =============================================================
+    # TEXT MATCHING
+    # =============================================================
+
+    def _text_matches(
+        self,
+        first: UIElement,
+        second: UIElement,
+    ) -> bool:
+        """
+        Determine whether two elements have sufficiently
+        similar textual information.
+        """
+
+        first_text = self._normalize(
+            first.text
+        )
+
+        second_text = self._normalize(
+            second.text
+        )
+
+        if not first_text or not second_text:
+            return False
+
+        if first_text == second_text:
+            return True
+
+        first_words = set(
+            first_text.split()
+        )
+
+        second_words = set(
+            second_text.split()
+        )
+
+        if not first_words or not second_words:
+            return False
+
+        overlap = (
+            len(
+                first_words
+                & second_words
+            )
+            / len(
+                first_words
+                | second_words
+            )
+        )
+
+        return (
+            overlap
+            >= self.TEXT_SIMILARITY_THRESHOLD
+        )
+
+    # =============================================================
+    # HELPERS
+    # =============================================================
+
     @staticmethod
     def _normalize(
         text: str | None,
@@ -482,4 +561,23 @@ class PerceptionManager:
 
         return " ".join(
             text.strip().lower().split()
+        )
+
+    @staticmethod
+    def _normalize_confidence(
+        confidence: float,
+    ) -> float:
+        """
+        Keep confidence values in the standard
+        0.0–1.0 range.
+        """
+
+        try:
+            value = float(confidence)
+        except (TypeError, ValueError):
+            return 0.0
+
+        return max(
+            0.0,
+            min(1.0, value),
         )
