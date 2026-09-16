@@ -4,7 +4,9 @@ from typing import Any
 
 @dataclass
 class TutoringInstruction:
-    """Represents one instruction given to the user."""
+    """
+    Represents one interactive tutoring step.
+    """
 
     message: str
 
@@ -23,6 +25,10 @@ class TutoringInstruction:
     recovery: dict[str, Any] = field(
         default_factory=dict
     )
+
+    success_message: str | None = None
+
+    waiting_message: str | None = None
 
     completed: bool = False
 

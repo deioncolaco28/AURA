@@ -4,19 +4,27 @@ from app.tutoring.instruction import TutoringInstruction
 
 
 class Tutor:
-    """Creates instructions for Show Me How mode."""
+    """
+    Creates conversational instructions for
+    Show Me How mode.
+    """
 
     def create_instructions(
         self,
         task: Task,
     ) -> list[TutoringInstruction]:
-        """Convert a task into tutoring instructions."""
+        """
+        Convert a task into interactive tutoring
+        instructions.
+        """
 
         instructions = []
 
         for action in task.actions:
-            instruction = self._action_to_instruction(
-                action
+            instruction = (
+                self._action_to_instruction(
+                    action
+                )
             )
 
             if instruction is not None:
@@ -30,7 +38,10 @@ class Tutor:
         self,
         action,
     ) -> TutoringInstruction | None:
-        """Convert an action into a tutoring instruction."""
+        """
+        Convert one planned action into a
+        conversational tutoring instruction.
+        """
 
         if action.action_type == ActionType.SPEAK:
             return TutoringInstruction(
@@ -44,7 +55,9 @@ class Tutor:
             if key.lower() == "win":
                 return TutoringInstruction(
                     message=(
-                        "Press the Windows key."
+                        "First, press the Windows key. "
+                        "I'll wait for the Start menu "
+                        "to appear."
                     ),
                     action_type=ActionType.PRESS_KEY,
                     parameters={
@@ -53,17 +66,26 @@ class Tutor:
                     completion={
                         "screen_changed": True,
                     },
+                    success_message=(
+                        "Good. I can see that the "
+                        "screen changed."
+                    ),
                     recovery={
                         "message": (
-                            "Please press the "
-                            "Windows key again."
+                            "I haven't detected the "
+                            "Windows menu yet. "
+                            "Please press the Windows "
+                            "key again."
                         ),
                         "max_attempts": 2,
                     },
                 )
 
             return TutoringInstruction(
-                message=f"Press the {key} key.",
+                message=(
+                    f"Please press the {key} key. "
+                    "I'll wait for you."
+                ),
                 action_type=ActionType.PRESS_KEY,
                 parameters={
                     "key": key,
@@ -71,10 +93,15 @@ class Tutor:
                 completion={
                     "screen_changed": True,
                 },
+                success_message=(
+                    f"Good. The {key} key was detected."
+                ),
                 recovery={
                     "message": (
+                        f"I haven't detected the "
+                        f"expected change yet. "
                         f"Please press the {key} "
-                        "key again."
+                        f"key again."
                     ),
                     "max_attempts": 2,
                 },
@@ -84,7 +111,12 @@ class Tutor:
             text = str(action.value)
 
             return TutoringInstruction(
-                message=f"Type {text}.",
+                message=(
+                    f"Great. Now type "
+                    f"'{text}' into the search box. "
+                    "I'll let you know when I can "
+                    "see it."
+                ),
                 action_type=ActionType.TYPE_TEXT,
                 parameters={
                     "text": text,
@@ -92,10 +124,15 @@ class Tutor:
                 completion={
                     "screen_contains": text,
                 },
+                success_message=(
+                    f"Perfect. I can see "
+                    f"'{text}' on the screen."
+                ),
                 recovery={
                     "message": (
-                        f"Please type {text} "
-                        "into the search field."
+                        f"I can't see '{text}' yet. "
+                        f"Please type it into the "
+                        f"search field."
                     ),
                     "max_attempts": 2,
                 },
@@ -116,16 +153,21 @@ class Tutor:
 
             return TutoringInstruction(
                 message=(
-                    f"Click the highlighted "
-                    f"{target}."
+                    f"Excellent. I found "
+                    f"{target} and highlighted it. "
+                    f"Now click it to continue."
                 ),
                 target=target,
                 action_type=ActionType.CLICK,
                 completion=completion,
+                success_message=(
+                    f"Perfect. {target} has been opened."
+                ),
                 recovery={
                     "message": (
-                        f"Please click the "
-                        f"highlighted {target}."
+                        f"I haven't detected the "
+                        f"click yet. Please click "
+                        f"the highlighted {target}."
                     ),
                     "max_attempts": 2,
                 },
@@ -138,7 +180,11 @@ class Tutor:
             )
 
             return TutoringInstruction(
-                message=f"Open {application}.",
+                message=(
+                    f"Please open {application}. "
+                    "I'll wait and confirm when "
+                    "it is running."
+                ),
                 target=application,
                 action_type=ActionType.LAUNCH_APPLICATION,
                 completion={
@@ -146,10 +192,14 @@ class Tutor:
                         f"{application}.exe"
                     ),
                 },
+                success_message=(
+                    f"Perfect. {application} is now open."
+                ),
                 recovery={
                     "message": (
-                        f"Please open "
-                        f"{application}."
+                        f"I can't detect {application} "
+                        "yet. Please open it and I'll "
+                        "check again."
                     ),
                     "max_attempts": 2,
                 },

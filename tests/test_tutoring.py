@@ -1,35 +1,30 @@
-from unittest.mock import Mock
-
 from app.config.constants import AssistantMode
 from app.intelligence.action import Action, ActionType
 from app.intelligence.intent import Intent
 from app.intelligence.planner import Planner
-from app.tutoring.instruction import TutoringInstruction
 from app.tutoring.tutor import Tutor
-from app.tutoring.tutoring_controller import (
-    TutoringController,
-)
 
 
-def test_tutoring_instruction_creation():
-    instruction = TutoringInstruction(
-        message="Click Start.",
-        target="Start",
-        action_type=ActionType.CLICK,
-        completion={
-            "screen_contains": "Start"
-        },
+def test_tutor_converts_speak_action():
+    tutor = Tutor()
+
+    action = Action(
+        action_type=ActionType.SPEAK,
+        value="I will help you.",
     )
 
-    assert instruction.message == "Click Start."
-    assert instruction.target == "Start"
-    assert instruction.action_type == ActionType.CLICK
-    assert instruction.completed is False
+    task = type(
+        "TestTask",
+        (),
+        {"actions": [action]},
+    )()
+
+    instructions = tutor.create_instructions(task)
+
+    assert len(instructions) == 1
     assert (
-        instruction.completion[
-            "screen_contains"
-        ]
-        == "Start"
+        instructions[0].message
+        == "I will help you."
     )
 
 
@@ -47,20 +42,29 @@ def test_tutor_converts_click_action():
         {"actions": [action]},
     )()
 
-    instructions = tutor.create_instructions(
-        task
-    )
+    instructions = tutor.create_instructions(task)
 
     assert len(instructions) == 1
+
+    instruction = instructions[0]
+
     assert (
-        instructions[0].message
-        == "Click the highlighted Start."
+        instruction.message
+        == (
+            "Excellent. I found Start and highlighted it. "
+            "Now click it to continue."
+        )
     )
-    assert instructions[0].target == "Start"
-    assert (
-        instructions[0].action_type
-        == "CLICK"
+
+    assert instruction.target == "Start"
+    assert instruction.action_type == ActionType.CLICK
+    assert instruction.completion == {
+        "target_disappears": "Start"
+    }
+    assert instruction.success_message == (
+        "Perfect. Start has been opened."
     )
+    assert instruction.recovery["max_attempts"] == 2
 
 
 def test_tutor_converts_type_action():
@@ -77,24 +81,70 @@ def test_tutor_converts_type_action():
         {"actions": [action]},
     )()
 
-    instructions = tutor.create_instructions(
-        task
-    )
+    instructions = tutor.create_instructions(task)
 
     assert len(instructions) == 1
+
+    instruction = instructions[0]
+
     assert (
-        instructions[0].message
-        == "Type Hello World."
+        instruction.message
+        == (
+            "Great. Now type 'Hello World' into the "
+            "search box. I'll let you know when I can see it."
+        )
     )
-    assert (
-        instructions[0].action_type
-        == "TYPE_TEXT"
+
+    assert instruction.action_type == ActionType.TYPE_TEXT
+    assert instruction.parameters == {
+        "text": "Hello World"
+    }
+    assert instruction.completion == {
+        "screen_contains": "Hello World"
+    }
+    assert instruction.success_message == (
+        "Perfect. I can see 'Hello World' on the screen."
     )
+    assert instruction.recovery["max_attempts"] == 2
+
+
+def test_tutor_converts_windows_key_action():
+    tutor = Tutor()
+
+    action = Action(
+        action_type=ActionType.PRESS_KEY,
+        value="win",
+    )
+
+    task = type(
+        "TestTask",
+        (),
+        {"actions": [action]},
+    )()
+
+    instructions = tutor.create_instructions(task)
+
+    assert len(instructions) == 1
+
+    instruction = instructions[0]
+
     assert (
-        instructions[0].completion[
-            "screen_contains"
-        ]
-        == "Hello World"
+        instruction.message
+        == (
+            "First, press the Windows key. "
+            "I'll wait for the Start menu to appear."
+        )
+    )
+
+    assert instruction.action_type == ActionType.PRESS_KEY
+    assert instruction.parameters == {
+        "key": "win"
+    }
+    assert instruction.completion == {
+        "screen_changed": True
+    }
+    assert instruction.success_message == (
+        "Good. I can see that the screen changed."
     )
 
 
@@ -111,100 +161,107 @@ def test_tutor_converts_planned_actions():
 
     tutor = Tutor()
 
-    instructions = tutor.create_instructions(
-        task
-    )
+    instructions = tutor.create_instructions(task)
 
     assert len(instructions) == 4
 
+    # Step 1: introductory voice guidance
     assert (
         instructions[0].message
         == "I will show you how to open Notepad."
     )
 
+    # Step 2: user presses Windows key
     assert (
         instructions[1].message
-        == "Press the Windows key."
+        == (
+            "First, press the Windows key. "
+            "I'll wait for the Start menu to appear."
+        )
     )
 
-    assert (
-        instructions[1].completion[
-            "screen_changed"
-        ]
-        is True
+    assert instructions[1].completion == {
+        "screen_changed": True
+    }
+
+    assert instructions[1].success_message == (
+        "Good. I can see that the screen changed."
     )
 
+    # Step 3: user types Notepad
     assert (
         instructions[2].message
-        == "Type Notepad."
+        == (
+            "Great. Now type 'Notepad' into the "
+            "search box. I'll let you know when I can see it."
+        )
     )
 
-    assert (
-        instructions[2].completion[
-            "screen_contains"
-        ]
-        == "Notepad"
-    )
+    assert instructions[2].completion == {
+        "screen_contains": "Notepad"
+    }
 
+    # Step 4: user clicks Notepad
     assert (
         instructions[3].message
-        == "Click the highlighted Notepad."
+        == (
+            "Excellent. I found Notepad and highlighted it. "
+            "Now click it to continue."
+        )
     )
 
-
-def test_tutoring_controller_runs_instructions():
-    voice_manager = Mock()
-
-    controller = TutoringController(
-        voice_manager=voice_manager
-    )
-
-    controller._wait_for_completion = Mock(
-        return_value=True
-    )
-
-    instructions = [
-        TutoringInstruction(
-            message="Press the Windows key.",
-            action_type=ActionType.PRESS_KEY,
-            completion={
-                "screen_contains": "Notepad"
-            },
-        ),
-        TutoringInstruction(
-            message="Type Notepad.",
-            action_type=ActionType.TYPE_TEXT,
-            completion={
-                "screen_contains": "Notepad"
-            },
-        ),
-    ]
-
-    controller.run(
-        instructions
+    assert instructions[3].target == "Notepad"
+    assert (
+        instructions[3].completion["type"]
+        == "APPLICATION_RUNNING"
     )
 
     assert (
-        voice_manager.speak.call_count
-        == 2
+        instructions[3].completion["process"]
+        == "notepad.exe"
     )
+
+    assert instructions[3].success_message == (
+        "Perfect. Notepad has been opened."
+    )
+
+
+def test_tutor_converts_launch_application_action():
+    tutor = Tutor()
+
+    action = Action(
+        action_type=ActionType.LAUNCH_APPLICATION,
+        target="Calculator",
+    )
+
+    task = type(
+        "TestTask",
+        (),
+        {"actions": [action]},
+    )()
+
+    instructions = tutor.create_instructions(task)
+
+    assert len(instructions) == 1
+
+    instruction = instructions[0]
 
     assert (
-        voice_manager.speak.call_args_list[0]
-        .args[0]
-        == "Press the Windows key."
+        instruction.message
+        == (
+            "Please open Calculator. "
+            "I'll wait and confirm when it is running."
+        )
     )
 
-    assert (
-        voice_manager.speak.call_args_list[1]
-        .args[0]
-        == "Type Notepad."
+    assert instruction.target == "Calculator"
+
+    assert instruction.completion == {
+        "application_running": "Calculator.exe"
+    }
+
+    assert instruction.success_message == (
+        "Perfect. Calculator is now open."
     )
 
-    assert (
-        controller._wait_for_completion.call_count
-        == 2
-    )
-
-    assert instructions[0].completed is True
-    assert instructions[1].completed is True
+    assert instruction.recovery["max_attempts"] == 2

@@ -15,7 +15,13 @@ from app.voice.voice_manager import VoiceManager
 
 
 class TutoringController:
-    """Controls the interactive Show Me How experience."""
+    """
+    Controls the interactive Show Me How experience.
+
+    AURA never performs the requested user action in this mode.
+    It gives guidance, observes the screen, detects completion,
+    provides feedback, and then continues to the next step.
+    """
 
     def __init__(
         self,
@@ -37,7 +43,6 @@ class TutoringController:
             or ScreenshotCapture()
         )
 
-        # Use the real Tesseract implementation by default.
         self.ocr = (
             ocr
             or TesseractOCR()
@@ -64,31 +69,31 @@ class TutoringController:
         self.screen_verifier = (
             screen_verifier
             or ScreenVerifier(
-                screenshot_capture=(
-                    self.screenshot_capture
-                ),
+                screenshot_capture=self.screenshot_capture,
                 ocr=self.ocr,
                 grounder=self.grounder,
             )
         )
 
-        self.grounding_threshold = (
-            grounding_threshold
-        )
+        self.grounding_threshold = grounding_threshold
 
         self._baseline_screen = None
 
     def run(
         self,
         instructions: list[TutoringInstruction],
-    ) -> None:
-        """Run tutoring instructions sequentially."""
+    ) -> bool:
+        """
+        Run tutoring instructions sequentially.
+
+        Returns True only when every tutoring step is completed.
+        """
 
         if not instructions:
             self.voice_manager.speak(
                 "There are no instructions available."
             )
-            return
+            return False
 
         total_steps = len(instructions)
 
@@ -101,10 +106,8 @@ class TutoringController:
                 f"{index}/{total_steps}"
             )
 
-            completed = (
-                self._execute_instruction(
-                    instruction
-                )
+            completed = self._execute_instruction(
+                instruction
             )
 
             if not completed:
@@ -119,7 +122,7 @@ class TutoringController:
                 )
 
                 self.overlay.close()
-                return
+                return False
 
             instruction.completed = True
 
@@ -129,11 +132,29 @@ class TutoringController:
 
             self.overlay.close()
 
+            # Give conversational feedback before
+            # moving to the next instruction.
+            success_message = getattr(
+                instruction,
+                "success_message",
+                None,
+            )
+
+            if success_message:
+                self.voice_manager.speak(
+                    success_message
+                )
+
+        return True
+
     def _execute_instruction(
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """Guide the user and monitor completion."""
+        """
+        Give the instruction and continuously observe
+        until the user completes it.
+        """
 
         instruction.attempts = 0
 
@@ -141,7 +162,7 @@ class TutoringController:
             instruction
         ):
             self._baseline_screen = (
-                self.screen_verifier.capture_screen()
+                self.screenshot_capture.capture()
             )
 
         self.voice_manager.speak(
@@ -156,10 +177,8 @@ class TutoringController:
         if instruction.action_type == "SPEAK":
             return True
 
-        completed = (
-            self._wait_for_completion(
-                instruction
-            )
+        completed = self._wait_for_completion(
+            instruction
         )
 
         if completed:
@@ -173,7 +192,12 @@ class TutoringController:
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """Wait until the expected screen state appears."""
+        """
+        Continuously observe the screen until the
+        expected user action is detected.
+
+        AURA does not perform the action itself.
+        """
 
         start_time = time.time()
 
@@ -198,7 +222,10 @@ class TutoringController:
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """Check the configured completion condition."""
+        """
+        Check whether the user has completed
+        the requested tutoring step.
+        """
 
         completion = instruction.completion
 
@@ -233,13 +260,21 @@ class TutoringController:
 
         if "screen_changed" in completion:
             current_screen = (
-                self.screen_verifier.capture_screen()
+                self.screenshot_capture.capture()
             )
 
-            return self.screen_verifier.has_screen_changed(
-                self._baseline_screen,
-                current_screen,
+            if self._baseline_screen is None:
+                self._baseline_screen = current_screen
+                return False
+
+            result = (
+                self._compare_screens(
+                    self._baseline_screen,
+                    current_screen,
+                )
             )
+
+            return result
 
         if "application_running" in completion:
             process = completion[
@@ -269,59 +304,100 @@ class TutoringController:
 
         return False
 
-        def _recover_instruction(
-            self,
-            instruction: TutoringInstruction,
-        ) -> bool:
-            """Retry an instruction using its configured recovery policy."""
+    def _compare_screens(
+        self,
+        baseline,
+        current,
+    ) -> bool:
+        """
+        Compare two screenshots.
 
-            recovery = instruction.recovery
+        This is intentionally kept inside the tutoring
+        controller so tutoring does not depend on an
+        unsupported ScreenVerifier.capture_screen()
+        method.
+        """
 
-            if not recovery:
-                return False
+        try:
+            from PIL import ImageChops
 
-            max_attempts = int(
-                recovery.get("max_attempts", 0)
+            difference = ImageChops.difference(
+                baseline,
+                current,
             )
 
-            if max_attempts <= 0:
-                return False
+            return (
+                difference.getbbox()
+                is not None
+            )
 
-            while instruction.attempts < max_attempts:
-                instruction.attempts += 1
+        except Exception as error:
+            print(
+                f"Screen comparison error: {error}"
+            )
+            return False
 
-                message = recovery.get("message")
+    def _recover_instruction(
+        self,
+        instruction: TutoringInstruction,
+    ) -> bool:
+        """
+        Retry an instruction using its configured
+        recovery policy.
+        """
 
-                if message:
-                    self.voice_manager.speak(
-                        str(message)
-                    )
+        recovery = instruction.recovery
 
-                print(
-                    f"Recovery attempt "
-                    f"{instruction.attempts}/"
-                    f"{max_attempts}"
+        if not recovery:
+            return False
+
+        max_attempts = int(
+            recovery.get("max_attempts", 0)
+        )
+
+        if max_attempts <= 0:
+            return False
+
+        while instruction.attempts < max_attempts:
+            instruction.attempts += 1
+
+            message = recovery.get(
+                "message"
+            )
+
+            if message:
+                self.voice_manager.speak(
+                    str(message)
                 )
 
-                self.overlay.close()
+            print(
+                f"Recovery attempt "
+                f"{instruction.attempts}/"
+                f"{max_attempts}"
+            )
 
-                if instruction.target:
-                    self._highlight_target(
-                        instruction.target
-                    )
+            self.overlay.close()
 
-                if self._wait_for_completion(
-                    instruction
-                ):
-                    return True
+            if instruction.target:
+                self._highlight_target(
+                    instruction.target
+                )
 
-            return False
+            if self._wait_for_completion(
+                instruction
+            ):
+                return True
+
+        return False
 
     def _requires_screen_baseline(
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """Determine whether baseline capture is required."""
+        """
+        Determine whether this instruction requires
+        a before/after screen comparison.
+        """
 
         return (
             "screen_changed"
@@ -332,7 +408,13 @@ class TutoringController:
         self,
         target: str,
     ) -> None:
-        """Find and highlight the best target."""
+        """
+        Locate the target using OCR and grounding,
+        then display the tutoring highlight.
+
+        AURA only points at the target.
+        It never clicks it.
+        """
 
         if self.ocr is None:
             print(
@@ -341,56 +423,55 @@ class TutoringController:
             )
             return
 
-        image = self.screenshot_capture.capture()
+        try:
+            image = (
+                self.screenshot_capture.capture()
+            )
 
-        elements = self.ocr.detect_text(
-            image
-        )
+            elements = self.ocr.detect_text(
+                image
+            )
 
-        result = self.grounder.ground(
-            elements=elements,
-            target=target,
-        )
+            result = self.grounder.ground(
+                elements=elements,
+                target=target,
+            )
 
-        if not result.found:
+            if not result.found:
+                print(
+                    f"Could not find tutoring target: "
+                    f"{target}"
+                )
+
+                return
+
+            if result.score < self.grounding_threshold:
+                print(
+                    f"Target match too weak: "
+                    f"{target} "
+                    f"(score={result.score:.2f})"
+                )
+
+                return
+
+            element = result.element
+
             print(
-                f"Could not find tutoring target: "
-                f"{target}"
+                f"Grounded tutoring target: "
+                f"{element.text} "
+                f"score={result.score:.2f} "
+                f"reason={result.reason}"
             )
 
-            self.voice_manager.speak(
-                f"I could not find {target} "
-                "on the screen."
+            self.overlay.show(
+                x=element.x,
+                y=element.y,
+                width=element.width,
+                height=element.height,
             )
 
-            return
-
-        if result.score < self.grounding_threshold:
+        except Exception as error:
             print(
-                f"Target match too weak: "
-                f"{target} "
-                f"(score={result.score:.2f})"
+                f"Tutoring target detection error: "
+                f"{error}"
             )
-
-            self.voice_manager.speak(
-                f"I could not confidently "
-                f"identify {target}."
-            )
-
-            return
-
-        element = result.element
-
-        print(
-            f"Grounded tutoring target: "
-            f"{element.text} "
-            f"score={result.score:.2f} "
-            f"reason={result.reason}"
-        )
-
-        self.overlay.show(
-            x=element.x,
-            y=element.y,
-            width=element.width,
-            height=element.height,
-        )
