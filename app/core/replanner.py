@@ -9,8 +9,17 @@ from app.intelligence.task import Task
 
 class Replanner(ABC):
     """
-    Interface for generating replacement actions after
-    an action fails.
+    Base interface for task recovery and replanning.
+
+    A replanner receives:
+        - the original task
+        - current execution context
+        - the failed action
+        - the latest screen observation
+        - optional structured failure information
+
+    The failure argument is optional to preserve compatibility
+    with simpler/custom replanners.
     """
 
     @abstractmethod
@@ -25,16 +34,16 @@ class Replanner(ABC):
         """
         Generate replacement actions.
 
-        `failure` is optional for backward compatibility with
-        older replanners while the recovery architecture is
-        being upgraded.
+        Return an empty list when recovery is not possible.
         """
         raise NotImplementedError
 
 
 class NoOpReplanner(Replanner):
     """
-    Default replanner that performs no recovery.
+    Default replanner.
+
+    Used when no recovery strategy has been configured.
     """
 
     def replan(
@@ -45,4 +54,8 @@ class NoOpReplanner(Replanner):
         observation: ScreenObservation,
         failure: FailureInfo | None = None,
     ) -> list[Action]:
+        """
+        Do not generate replacement actions.
+        """
+
         return []

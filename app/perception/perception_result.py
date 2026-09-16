@@ -1,11 +1,17 @@
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.perception.ui_element import UIElement
 
 
 @dataclass
 class PerceptionResult:
-    """Unified result of screen perception."""
+    """
+    Unified result produced by AURA's perception layer.
+
+    OCR and VLM outputs are converted into UIElement objects
+    and fused into one normalized representation.
+    """
 
     elements: list[UIElement] = field(
         default_factory=list
@@ -17,25 +23,50 @@ class PerceptionResult:
         default_factory=list
     )
 
-    metadata: dict = field(
+    screenshot: Any = None
+
+    metadata: dict[str, Any] = field(
         default_factory=dict
     )
 
-    def find_text(
+    @property
+    def element_count(self) -> int:
+        """Return the number of unified UI elements."""
+
+        return len(self.elements)
+
+    @property
+    def has_elements(self) -> bool:
+        """Return True when UI elements were detected."""
+
+        return bool(self.elements)
+
+    def get_elements_by_source(
         self,
-        text: str,
+        source: str,
     ) -> list[UIElement]:
-        """Find elements containing text."""
-
-        normalized = text.strip().lower()
-
-        if not normalized:
-            return []
+        """Return elements originating from a source."""
 
         return [
             element
             for element in self.elements
-            if element.text
-            and normalized
-            in element.text.lower()
+            if element.source == source
         ]
+
+    def contains_text(
+        self,
+        text: str,
+    ) -> bool:
+        """Return True when an element contains the requested text."""
+
+        if not text:
+            return False
+
+        normalized = text.strip().lower()
+
+        return any(
+            normalized in (
+                element.text or ""
+            ).lower()
+            for element in self.elements
+        )

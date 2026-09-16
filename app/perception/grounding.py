@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 
-from app.perception.ocr import TextElement
 from app.perception.ui_element import UIElement
 
 
@@ -9,7 +8,7 @@ class GroundingResult:
     """Represents a grounded UI target."""
 
     target: str
-    element: UIElement | TextElement | None
+    element: UIElement | object | None
     score: float
     reason: str
 
@@ -21,7 +20,22 @@ class GroundingResult:
 
 
 class UIGrounder:
-    """Finds UI elements using text and descriptions."""
+    """
+    Finds the best UI element for a natural-language target.
+
+    Grounding considers:
+
+    1. Exact text
+    2. Text containment
+    3. Description
+    4. Word overlap
+    5. Element confidence
+    6. Fused OCR/VLM elements
+
+    The grounder remains compatible with both:
+        - UIElement
+        - legacy OCR TextElement
+    """
 
     def find_text(
         self,
@@ -61,6 +75,7 @@ class UIGrounder:
         best_reason = ""
 
         for element in elements:
+
             score, reason = (
                 self._score_element(
                     element,
@@ -93,117 +108,245 @@ class UIGrounder:
         element,
         target: str,
     ) -> tuple[float, str]:
-        """Score an element against a target."""
+        """Score one UI element against a target."""
 
         candidates = []
 
-        if getattr(
+        text = getattr(
             element,
             "text",
             None,
-        ):
-            candidates.append(
-                element.text
-            )
+        )
 
-        if getattr(
+        description = getattr(
+            element,
+            "description",
+            None,
+        )
+
+        attributes = getattr(
             element,
             "attributes",
-            None,
-        ):
-            description = (
-                element.attributes.get(
+            {},
+        )
+
+        if text:
+            candidates.append(
+                (
+                    text,
+                    "text",
+                )
+            )
+
+        if description:
+            candidates.append(
+                (
+                    description,
+                    "description",
+                )
+            )
+
+        if attributes:
+            attribute_description = (
+                attributes.get(
                     "description"
                 )
             )
 
-            if description:
+            if attribute_description:
                 candidates.append(
-                    description
-                )
-
-        if hasattr(
-            element,
-            "description",
-        ):
-            if element.description:
-                candidates.append(
-                    element.description
+                    (
+                        attribute_description,
+                        "attribute description",
+                    )
                 )
 
         best_score = 0.0
         best_reason = "No meaningful match."
 
-        for candidate in candidates:
-            text = self._normalize(
-                candidate
+        for candidate, source in candidates:
+
+            normalized_candidate = (
+                self._normalize(
+                    candidate
+                )
             )
 
-            if text == target:
-                return (
-                    1.0,
-                    "Exact match.",
-                )
-
-            if target in text:
-                best_score = max(
-                    best_score,
-                    0.85,
-                )
-                best_reason = (
-                    "Target contained in element."
-                )
+            if not normalized_candidate:
                 continue
 
-            if text in target:
-                best_score = max(
-                    best_score,
-                    0.75,
+            if (
+                normalized_candidate
+                == target
+            ):
+                score = 1.0
+
+                element_source = getattr(
+                    element,
+                    "source",
+                    None,
                 )
-                best_reason = (
-                    "Element text contained in target."
+
+                if element_source == "FUSED":
+                    reason = (
+                        f"Exact {source} match "
+                        "from fused perception."
+                    )
+                else:
+                    reason = (
+                        f"Exact {source} match."
+                    )
+
+                score = (
+                    self._apply_confidence_bonus(
+                        score,
+                        element,
+                    )
                 )
+
+                if score > best_score:
+                    best_score = score
+                    best_reason = reason
+
+                continue
+
+            if target in normalized_candidate:
+
+                score = 0.85
+
+                score = (
+                    self._apply_confidence_bonus(
+                        score,
+                        element,
+                    )
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_reason = (
+                        f"Target contained in "
+                        f"{source}."
+                    )
+
+                continue
+
+            if normalized_candidate in target:
+
+                score = 0.75
+
+                score = (
+                    self._apply_confidence_bonus(
+                        score,
+                        element,
+                    )
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_reason = (
+                        f"{source.capitalize()} "
+                        "contained in target."
+                    )
+
                 continue
 
             target_words = set(
                 target.split()
             )
 
-            text_words = set(
-                text.split()
+            candidate_words = set(
+                normalized_candidate.split()
             )
 
-            if target_words and text_words:
+            if (
+                target_words
+                and candidate_words
+            ):
+
                 overlap = (
                     len(
                         target_words
-                        & text_words
+                        & candidate_words
                     )
                     / len(
                         target_words
-                        | text_words
+                        | candidate_words
                     )
                 )
 
                 if overlap >= 0.5:
-                    best_score = max(
-                        best_score,
-                        0.65,
-                    )
-                    best_reason = (
-                        "Strong word overlap."
+
+                    score = 0.65
+
+                    score = (
+                        self._apply_confidence_bonus(
+                            score,
+                            element,
+                        )
                     )
 
+                    if score > best_score:
+                        best_score = score
+                        best_reason = (
+                            f"Strong word overlap "
+                            f"in {source}."
+                        )
+
         return (
-            best_score,
+            min(best_score, 1.0),
             best_reason,
         )
 
-    def _normalize(
+    def _apply_confidence_bonus(
         self,
-        text: str,
+        score: float,
+        element,
+    ) -> float:
+        """
+        Slightly reward high-confidence perception.
+
+        Supports both UIElement and legacy OCR
+        TextElement objects.
+        """
+
+        confidence = float(
+            getattr(
+                element,
+                "confidence",
+                0.0,
+            )
+            or 0.0
+        )
+
+        # OCR confidence may be represented as a
+        # percentage such as 95.0 rather than 0-1.
+        if confidence > 1.0:
+            confidence /= 100.0
+
+        if confidence >= 0.90:
+            score += 0.03
+
+        elif confidence >= 0.75:
+            score += 0.02
+
+        if getattr(
+            element,
+            "source",
+            None,
+        ) == "FUSED":
+            score += 0.02
+
+        return min(
+            score,
+            1.0,
+        )
+
+    @staticmethod
+    def _normalize(
+        text: str | None,
     ) -> str:
-        """Normalize text for matching."""
+        if not text:
+            return ""
 
         return " ".join(
             text.strip().lower().split()

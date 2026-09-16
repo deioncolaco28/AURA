@@ -18,6 +18,14 @@ class RuleBasedReplanner(Replanner):
 
     MIN_GROUNDING_SCORE = 0.65
 
+    TEXT_FIELD_TYPES = {
+        "text_field",
+        "input",
+        "textbox",
+        "text_box",
+        "editable",
+    }
+
     def __init__(
         self,
         grounder: UIGrounder | None = None,
@@ -137,13 +145,17 @@ class RuleBasedReplanner(Replanner):
 
         x, y = element.center
 
+        if failed_action.action_type == (
+            ActionType.DOUBLE_CLICK
+        ):
+            action_type = (
+                ActionType.DOUBLE_CLICK
+            )
+        else:
+            action_type = ActionType.CLICK
+
         replacement = Action(
-            action_type=(
-                ActionType.CLICK
-                if failed_action.action_type
-                == ActionType.CLICK
-                else ActionType.DOUBLE_CLICK
-            ),
+            action_type=action_type,
             target=target,
             description=(
                 f"Grounded recovery action "
@@ -173,6 +185,10 @@ class RuleBasedReplanner(Replanner):
         failed_action: Action,
         observation: ScreenObservation,
     ) -> list[Action]:
+        """
+        Recover TYPE_TEXT by locating a text field
+        and clicking it before typing.
+        """
 
         if failed_action.value is None:
             return []
@@ -184,20 +200,153 @@ class RuleBasedReplanner(Replanner):
         if not text:
             return []
 
-        if not observation.elements:
+        text_field = (
+            self._find_text_field(
+                observation
+            )
+        )
+
+        if text_field is None:
             return []
 
-        replacement = ActionFactory.type_text(
+        x, y = text_field.center
+
+        target = (
+            text_field.text
+            or text_field.description
+            or "text field"
+        )
+
+        click_action = Action(
+            action_type=ActionType.CLICK,
+            target=target,
+            description=(
+                "Grounded recovery click "
+                "for text input."
+            ),
+            parameters={
+                "x": x,
+                "y": y,
+                "width": text_field.width,
+                "height": text_field.height,
+            },
+            metadata={
+                "recovery": True,
+                "recovery_strategy": (
+                    "grounded_text_field"
+                ),
+            },
+            resolved=True,
+        )
+
+        type_action = ActionFactory.type_text(
             text
         )
 
-        replacement.metadata.update(
+        type_action.metadata.update(
             {
                 "recovery": True,
                 "recovery_strategy": (
-                    "text_retry"
+                    "grounded_text_field"
                 ),
             }
         )
 
-        return [replacement]
+        return [
+            click_action,
+            type_action,
+        ]
+
+    def _find_text_field(
+        self,
+        observation: ScreenObservation,
+    ):
+        """
+        Find the most likely text input element.
+
+        Explicit text-field element types are preferred.
+        """
+
+        candidates = []
+
+        for element in observation.elements:
+
+            element_type = str(
+                getattr(
+                    element,
+                    "element_type",
+                    "",
+                )
+            ).lower()
+
+            if element_type in (
+                self.TEXT_FIELD_TYPES
+            ):
+                candidates.append(
+                    element
+                )
+
+        if not candidates:
+            return None
+
+        best = None
+        best_score = -1.0
+
+        for element in candidates:
+
+            score = 0.0
+
+            text = getattr(
+                element,
+                "text",
+                None,
+            )
+
+            description = getattr(
+                element,
+                "description",
+                None,
+            )
+
+            if text:
+                score += 0.2
+
+            if description:
+
+                normalized = (
+                    description.lower()
+                )
+
+                if any(
+                    keyword in normalized
+                    for keyword in (
+                        "search",
+                        "input",
+                        "text",
+                        "name",
+                        "address",
+                        "message",
+                    )
+                ):
+                    score += 0.5
+
+            width = getattr(
+                element,
+                "width",
+                0,
+            )
+
+            height = getattr(
+                element,
+                "height",
+                0,
+            )
+
+            if width > height:
+                score += 0.3
+
+            if score > best_score:
+                best = element
+                best_score = score
+
+        return best
