@@ -31,6 +31,7 @@ class UIGrounder:
     4. Word overlap
     5. Element confidence
     6. Fused OCR/VLM elements
+    7. Optional preferred screen region
 
     The grounder remains compatible with both:
         - UIElement
@@ -41,12 +42,14 @@ class UIGrounder:
         self,
         elements,
         target: str,
+        preferred_region=None,
     ):
         """Find a matching UI element."""
 
         result = self.ground(
             elements,
             target,
+            preferred_region=preferred_region,
         )
 
         return result.element
@@ -55,8 +58,19 @@ class UIGrounder:
         self,
         elements,
         target: str,
+        preferred_region=None,
     ) -> GroundingResult:
-        """Find the best matching element."""
+        """
+        Find the best matching element.
+
+        preferred_region:
+            Optional tuple:
+                (x, y, width, height)
+
+            When supplied, elements outside this region
+            receive a penalty. This is useful for tutoring
+            scenarios where the relevant UI area is known.
+        """
 
         normalized_target = self._normalize(
             target
@@ -82,6 +96,16 @@ class UIGrounder:
                     normalized_target,
                 )
             )
+
+            if preferred_region is not None:
+                score, reason = (
+                    self._apply_region_context(
+                        score,
+                        reason,
+                        element,
+                        preferred_region,
+                    )
+                )
 
             if score > best_score:
                 best_element = element
@@ -295,6 +319,93 @@ class UIGrounder:
         return (
             min(best_score, 1.0),
             best_reason,
+        )
+
+    def _apply_region_context(
+        self,
+        score: float,
+        reason: str,
+        element,
+        preferred_region,
+    ) -> tuple[float, str]:
+        """
+        Apply optional spatial context.
+
+        Elements inside the preferred region retain
+        their original score.
+
+        Elements outside the preferred region receive
+        a penalty so that an equally good match inside
+        the relevant region is preferred.
+        """
+
+        if self._element_in_region(
+            element,
+            preferred_region,
+        ):
+            return (
+                score,
+                f"{reason} Preferred region match.",
+            )
+
+        # Strongly reduce unrelated matches while
+        # preserving the element as a possible fallback.
+        adjusted_score = score * 0.50
+
+        return (
+            adjusted_score,
+            f"{reason} Outside preferred region.",
+        )
+
+    @staticmethod
+    def _element_in_region(
+        element,
+        region,
+    ) -> bool:
+        """
+        Check whether an element overlaps the preferred
+        region.
+
+        region = (x, y, width, height)
+        """
+
+        if not region or len(region) != 4:
+            return True
+
+        rx, ry, rw, rh = region
+
+        ex = int(
+            getattr(element, "x", 0)
+            or 0
+        )
+        ey = int(
+            getattr(element, "y", 0)
+            or 0
+        )
+        ew = int(
+            getattr(element, "width", 0)
+            or 0
+        )
+        eh = int(
+            getattr(element, "height", 0)
+            or 0
+        )
+
+        element_left = ex
+        element_top = ey
+        element_right = ex + ew
+        element_bottom = ey + eh
+
+        region_left = rx
+        region_top = ry
+        region_right = rx + rw
+        region_bottom = ry + rh
+
+        return (
+            element_right > region_left
+            and element_left < region_right
+            and element_bottom > region_top
+            and element_top < region_bottom
         )
 
     def _apply_confidence_bonus(

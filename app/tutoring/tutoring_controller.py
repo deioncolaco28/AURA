@@ -19,8 +19,17 @@ class TutoringController:
     Controls the interactive Show Me How experience.
 
     AURA never performs the requested user action in this mode.
-    It gives guidance, observes the screen, detects completion,
-    provides feedback, and then continues to the next step.
+
+    It:
+        - gives voice guidance
+        - observes the screen
+        - grounds visible targets
+        - highlights targets
+        - detects completion
+        - provides recovery guidance
+
+    AURA does not click, type, or press keys on behalf
+    of the user in Show Me How mode.
     """
 
     def __init__(
@@ -86,7 +95,8 @@ class TutoringController:
         """
         Run tutoring instructions sequentially.
 
-        Returns True only when every tutoring step is completed.
+        Returns True only when every tutoring step
+        is completed.
         """
 
         if not instructions:
@@ -122,6 +132,7 @@ class TutoringController:
                 )
 
                 self.overlay.close()
+
                 return False
 
             instruction.completed = True
@@ -132,8 +143,6 @@ class TutoringController:
 
             self.overlay.close()
 
-            # Give conversational feedback before
-            # moving to the next instruction.
             success_message = getattr(
                 instruction,
                 "success_message",
@@ -195,8 +204,6 @@ class TutoringController:
         """
         Continuously observe the screen until the
         expected user action is detected.
-
-        AURA does not perform the action itself.
         """
 
         start_time = time.time()
@@ -222,10 +229,7 @@ class TutoringController:
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """
-        Check whether the user has completed
-        the requested tutoring step.
-        """
+        """Check whether the tutoring step is complete."""
 
         completion = instruction.completion
 
@@ -267,14 +271,10 @@ class TutoringController:
                 self._baseline_screen = current_screen
                 return False
 
-            result = (
-                self._compare_screens(
-                    self._baseline_screen,
-                    current_screen,
-                )
+            return self._compare_screens(
+                self._baseline_screen,
+                current_screen,
             )
-
-            return result
 
         if "application_running" in completion:
             process = completion[
@@ -309,14 +309,7 @@ class TutoringController:
         baseline,
         current,
     ) -> bool:
-        """
-        Compare two screenshots.
-
-        This is intentionally kept inside the tutoring
-        controller so tutoring does not depend on an
-        unsupported ScreenVerifier.capture_screen()
-        method.
-        """
+        """Compare two screenshots."""
 
         try:
             from PIL import ImageChops
@@ -341,10 +334,7 @@ class TutoringController:
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """
-        Retry an instruction using its configured
-        recovery policy.
-        """
+        """Retry an instruction using its recovery policy."""
 
         recovery = instruction.recovery
 
@@ -394,10 +384,7 @@ class TutoringController:
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """
-        Determine whether this instruction requires
-        a before/after screen comparison.
-        """
+        """Check whether screen-change detection is required."""
 
         return (
             "screen_changed"
@@ -409,11 +396,11 @@ class TutoringController:
         target: str,
     ) -> None:
         """
-        Locate the target using OCR and grounding,
-        then display the tutoring highlight.
+        Locate and highlight a target inside the
+        current foreground window.
 
-        AURA only points at the target.
-        It never clicks it.
+        OCR coordinates are converted from window-relative
+        coordinates into absolute screen coordinates.
         """
 
         if self.ocr is None:
@@ -424,13 +411,29 @@ class TutoringController:
             return
 
         try:
+            window_bounds = (
+                self.screenshot_capture
+                .get_foreground_window_bounds()
+            )
+
+            window_x = window_bounds[0]
+            window_y = window_bounds[1]
+
             image = (
-                self.screenshot_capture.capture()
+                self.screenshot_capture
+                .capture_foreground_window()
             )
 
             elements = self.ocr.detect_text(
                 image
             )
+
+            if not elements:
+                print(
+                    "No OCR elements detected "
+                    "in the foreground window."
+                )
+                return
 
             result = self.grounder.ground(
                 elements=elements,
@@ -439,10 +442,10 @@ class TutoringController:
 
             if not result.found:
                 print(
-                    f"Could not find tutoring target: "
+                    f"Could not find tutoring target "
+                    f"in foreground window: "
                     f"{target}"
                 )
-
                 return
 
             if result.score < self.grounding_threshold:
@@ -451,10 +454,19 @@ class TutoringController:
                     f"{target} "
                     f"(score={result.score:.2f})"
                 )
-
                 return
 
             element = result.element
+
+            screen_x = (
+                window_x
+                + int(element.x)
+            )
+
+            screen_y = (
+                window_y
+                + int(element.y)
+            )
 
             print(
                 f"Grounded tutoring target: "
@@ -463,9 +475,19 @@ class TutoringController:
                 f"reason={result.reason}"
             )
 
+            print(
+                f"Window-relative coordinates: "
+                f"({element.x}, {element.y})"
+            )
+
+            print(
+                f"Screen coordinates: "
+                f"({screen_x}, {screen_y})"
+            )
+
             self.overlay.show(
-                x=element.x,
-                y=element.y,
+                x=screen_x,
+                y=screen_y,
                 width=element.width,
                 height=element.height,
             )
