@@ -410,9 +410,23 @@ class ExecutionEngine:
         step: ExecutionStep,
         action: Action,
     ) -> None:
-        """Preserve the action execution result."""
+        """Preserve a valid action execution result."""
 
-        if action.execution_result:
-            step.verification.update(
-                action.execution_result
-            )
+        execution_result = getattr(
+            action,
+            "execution_result",
+            None,
+        )
+
+        if not isinstance(
+            execution_result,
+            dict,
+         ):
+            return
+
+        if not execution_result:
+            return
+
+        step.verification.update(
+            execution_result
+        )

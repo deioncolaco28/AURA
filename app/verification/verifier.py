@@ -1,25 +1,43 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
 
 
+@dataclass
 class VerificationResult:
-    """Represents the result of verifying an action."""
+    """Represents the result of a verification operation."""
 
-    def __init__(
-        self,
-        success: bool,
-        message: str = "",
-    ):
-        self.success = success
-        self.message = message
+    success: bool
+
+    message: str = ""
+
+    verification_type: str | None = None
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
 
     def __bool__(self) -> bool:
+        """
+        Allow VerificationResult to be used directly
+        in boolean expressions.
+        """
+
+        return self.success
+
+    @property
+    def passed(self) -> bool:
+        """Backward-compatible alias for success."""
+
         return self.success
 
 
 class Verifier(ABC):
-    """Interface for action verification."""
+    """Abstract interface for verification components."""
 
     @abstractmethod
-    def verify(self, *args, **kwargs) -> VerificationResult:
-        """Verify whether an action succeeded."""
+    def verify(
+        self,
+        action,
+    ) -> VerificationResult:
         raise NotImplementedError

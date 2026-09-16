@@ -1,167 +1,400 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
-from PIL import Image, ImageChops, ImageStat
+from PIL import ImageChops
 
 from app.perception.grounding import UIGrounder
-from app.perception.ocr import OCR
+from app.perception.ocr import TesseractOCR
 from app.perception.screenshot import ScreenshotCapture
+from app.verification.verifier import (
+    VerificationResult,
+    Verifier,
+)
 
 
 @dataclass
 class ScreenVerificationResult:
-    """Result of a screen-state verification."""
-
     success: bool
-    message: str
-    detected_text: list[str]
+    message: str = ""
+    verification_type: str | None = None
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+    detected_text: list[str] = field(
+        default_factory=list
+    )
+
+    def __bool__(self) -> bool:
+        return self.success
+
+    @property
+    def passed(self) -> bool:
+        return self.success
 
 
-class ScreenVerifier:
-    """Verifies screen states using screenshots and OCR."""
+class ScreenVerifier(Verifier):
+    """
+    Verifies expected conditions against
+    the current screen.
+    """
 
     def __init__(
         self,
-        screenshot_capture: ScreenshotCapture | None = None,
-        ocr: OCR | None = None,
-        grounder: UIGrounder | None = None,
+        screenshot_capture=None,
+        ocr=None,
+        grounder=None,
     ):
         self.screenshot_capture = (
             screenshot_capture
             or ScreenshotCapture()
         )
 
-        self.ocr = ocr
+        self.ocr = (
+            ocr
+            or TesseractOCR()
+        )
 
         self.grounder = (
             grounder
             or UIGrounder()
         )
 
-    def capture_screen(self):
-        """Capture the current screen."""
+        self._previous_screenshot = None
 
-        return self.screenshot_capture.capture()
+    def verify(
+        self,
+        action,
+    ) -> VerificationResult:
+
+        verification = getattr(
+            action,
+            "verification",
+            {},
+        )
+
+        if not isinstance(
+            verification,
+            dict,
+        ):
+            verification = {}
+
+        verification_type = (
+            verification.get("type")
+        )
+
+        if (
+            verification_type
+            == "SCREEN_CONTAINS_TEXT"
+        ):
+            text = verification.get(
+                "text"
+            )
+
+            result = self.contains_text(
+                text
+            )
+
+            return VerificationResult(
+                success=result.success,
+                message=result.message,
+                verification_type=(
+                    result.verification_type
+                ),
+                metadata={
+                    **result.metadata,
+                    "detected_text": (
+                        result.detected_text
+                    ),
+                },
+            )
+
+        if (
+            verification_type
+            == "SCREEN_DOES_NOT_CONTAIN_TEXT"
+        ):
+            text = verification.get(
+                "text"
+            )
+
+            result = (
+                self.does_not_contain_text(
+                    text
+                )
+            )
+
+            return VerificationResult(
+                success=result.success,
+                message=result.message,
+                verification_type=(
+                    result.verification_type
+                ),
+                metadata={
+                    **result.metadata,
+                    "detected_text": (
+                        result.detected_text
+                    ),
+                },
+            )
+
+        if (
+            verification_type
+            == "SCREEN_CHANGED"
+        ):
+            result = (
+                self.has_screen_changed()
+            )
+
+            return VerificationResult(
+                success=result.success,
+                message=result.message,
+                verification_type=(
+                    result.verification_type
+                ),
+                metadata=result.metadata,
+            )
+
+        return VerificationResult(
+            success=False,
+            message=(
+                "Unsupported screen "
+                "verification type."
+            ),
+            verification_type=(
+                verification_type
+            ),
+        )
 
     def contains_text(
         self,
-        target: str,
+        text: str,
     ) -> ScreenVerificationResult:
-        """Verify that target text is visible."""
 
-        if not target.strip():
+        if not text:
             return ScreenVerificationResult(
                 success=False,
-                message="Target text is empty.",
-                detected_text=[],
-            )
-
-        if self.ocr is None:
-            return ScreenVerificationResult(
-                success=False,
-                message="OCR is unavailable.",
-                detected_text=[],
-            )
-
-        image = self.screenshot_capture.capture()
-
-        elements = self.ocr.detect_text(
-            image
-        )
-
-        detected_text = [
-            element.text
-            for element in elements
-        ]
-
-        element = self.grounder.find_text(
-            elements,
-            target,
-        )
-
-        if element is not None:
-            return ScreenVerificationResult(
-                success=True,
                 message=(
-                    f"Found '{target}' "
+                    "Could not find '' "
                     "on the screen."
                 ),
-                detected_text=detected_text,
+                verification_type=(
+                    "SCREEN_CONTAINS_TEXT"
+                ),
+                detected_text=[],
             )
 
-        return ScreenVerificationResult(
-            success=False,
-            message=(
-                f"Could not find '{target}' "
-                "on the screen."
-            ),
-            detected_text=detected_text,
-        )
+        try:
+            image = (
+                self.screenshot_capture.capture()
+            )
+
+            elements = (
+                self.ocr.detect_text(
+                    image
+                )
+            )
+
+            detected_text = [
+                element.text
+                for element in elements
+                if getattr(
+                    element,
+                    "text",
+                    None,
+                )
+            ]
+
+            result = self.grounder.find_text(
+                elements,
+                text,
+            )
+
+            if result is not None:
+                return ScreenVerificationResult(
+                    success=True,
+                    message=(
+                        f"Found '{text}' "
+                        "on the screen."
+                    ),
+                    verification_type=(
+                        "SCREEN_CONTAINS_TEXT"
+                    ),
+                    detected_text=(
+                        detected_text
+                    ),
+                )
+
+            return ScreenVerificationResult(
+                success=False,
+                message=(
+                    f"Could not find "
+                    f"'{text}' on the screen."
+                ),
+                verification_type=(
+                    "SCREEN_CONTAINS_TEXT"
+                ),
+                detected_text=(
+                    detected_text
+                ),
+            )
+
+        except Exception as error:
+            return ScreenVerificationResult(
+                success=False,
+                message=str(error),
+                verification_type=(
+                    "SCREEN_CONTAINS_TEXT"
+                ),
+                detected_text=[],
+            )
 
     def does_not_contain_text(
         self,
-        target: str,
+        text: str,
     ) -> ScreenVerificationResult:
-        """Verify that target text is not visible."""
 
-        result = self.contains_text(
-            target
-        )
+        if not text:
+            return ScreenVerificationResult(
+                success=True,
+                message=(
+                    "Text is not present "
+                    "on the screen."
+                ),
+                verification_type=(
+                    "SCREEN_DOES_NOT_CONTAIN_TEXT"
+                ),
+                detected_text=[],
+            )
 
-        return ScreenVerificationResult(
-            success=not result.success,
-            message=(
-                f"'{target}' is no longer visible."
-                if not result.success
-                else f"'{target}' is still visible."
-            ),
-            detected_text=result.detected_text,
-        )
+        try:
+            image = (
+                self.screenshot_capture.capture()
+            )
+
+            elements = (
+                self.ocr.detect_text(
+                    image
+                )
+            )
+
+            detected_text = [
+                element.text
+                for element in elements
+                if getattr(
+                    element,
+                    "text",
+                    None,
+                )
+            ]
+
+            result = self.grounder.find_text(
+                elements,
+                text,
+            )
+
+            if result is None:
+                return ScreenVerificationResult(
+                    success=True,
+                    message=(
+                        f"Could not find "
+                        f"'{text}' on the screen."
+                    ),
+                    verification_type=(
+                        "SCREEN_DOES_NOT_CONTAIN_TEXT"
+                    ),
+                    detected_text=(
+                        detected_text
+                    ),
+                )
+
+            return ScreenVerificationResult(
+                success=False,
+                message=(
+                    f"Found '{text}' "
+                    "on the screen."
+                ),
+                verification_type=(
+                    "SCREEN_DOES_NOT_CONTAIN_TEXT"
+                ),
+                detected_text=(
+                    detected_text
+                ),
+            )
+
+        except Exception as error:
+            return ScreenVerificationResult(
+                success=False,
+                message=str(error),
+                verification_type=(
+                    "SCREEN_DOES_NOT_CONTAIN_TEXT"
+                ),
+                detected_text=[],
+            )
 
     def has_screen_changed(
         self,
-        before,
-        after,
-        threshold: float = 3.0,
-    ) -> bool:
-        """Determine whether two screenshots differ."""
+    ) -> ScreenVerificationResult:
 
-        if before is None or after is None:
-            return False
+        try:
+            current = (
+                self.screenshot_capture.capture()
+            )
 
-        if not isinstance(
-            before,
-            Image.Image,
-        ):
-            return False
+            if self._previous_screenshot is None:
+                self._previous_screenshot = (
+                    current
+                )
 
-        if not isinstance(
-            after,
-            Image.Image,
-        ):
-            return False
+                return ScreenVerificationResult(
+                    success=True,
+                    message=(
+                        "Initial screen "
+                        "captured."
+                    ),
+                    verification_type=(
+                        "SCREEN_CHANGED"
+                    ),
+                )
 
-        if before.size != after.size:
-            return True
+            difference = ImageChops.difference(
+                self._previous_screenshot,
+                current,
+            )
 
-        before_small = before.resize(
-            (160, 90)
-        ).convert("RGB")
+            changed = (
+                difference.getbbox()
+                is not None
+            )
 
-        after_small = after.resize(
-            (160, 90)
-        ).convert("RGB")
+            self._previous_screenshot = (
+                current
+            )
 
-        difference = ImageChops.difference(
-            before_small,
-            after_small,
-        )
+            if changed:
+                return ScreenVerificationResult(
+                    success=True,
+                    message=(
+                        "Screen changed."
+                    ),
+                    verification_type=(
+                        "SCREEN_CHANGED"
+                    ),
+                )
 
-        statistics = ImageStat.Stat(
-            difference
-        )
+            return ScreenVerificationResult(
+                success=False,
+                message=(
+                    "Screen did not change."
+                ),
+                verification_type=(
+                    "SCREEN_CHANGED"
+                ),
+            )
 
-        mean_difference = sum(
-            statistics.mean
-        ) / len(statistics.mean)
-
-        return mean_difference >= threshold
+        except Exception as error:
+            return ScreenVerificationResult(
+                success=False,
+                message=str(error),
+                verification_type=(
+                    "SCREEN_CHANGED"
+                ),
+            )
