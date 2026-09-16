@@ -1,7 +1,7 @@
 import time
 
 from app.perception.grounding import UIGrounder
-from app.perception.ocr import OCR
+from app.perception.ocr import OCR, TesseractOCR
 from app.perception.screenshot import ScreenshotCapture
 from app.tutoring.instruction import TutoringInstruction
 from app.tutoring.overlay import HighlightOverlay
@@ -37,7 +37,11 @@ class TutoringController:
             or ScreenshotCapture()
         )
 
-        self.ocr = ocr
+        # Use the real Tesseract implementation by default.
+        self.ocr = (
+            ocr
+            or TesseractOCR()
+        )
 
         self.grounder = (
             grounder
@@ -265,52 +269,53 @@ class TutoringController:
 
         return False
 
-    def _recover_instruction(
-        self,
-        instruction: TutoringInstruction,
-    ) -> bool:
-        """Retry an instruction after timeout."""
+        def _recover_instruction(
+            self,
+            instruction: TutoringInstruction,
+        ) -> bool:
+            """Retry an instruction using its configured recovery policy."""
 
-        recovery = instruction.recovery
+            recovery = instruction.recovery
 
-        if not recovery:
-            return False
+            if not recovery:
+                return False
 
-        max_attempts = recovery.get(
-            "max_attempts",
-            0,
-        )
-
-        if instruction.attempts >= max_attempts:
-            return False
-
-        instruction.attempts += 1
-
-        message = recovery.get(
-            "message"
-        )
-
-        if message:
-            self.voice_manager.speak(
-                str(message)
+            max_attempts = int(
+                recovery.get("max_attempts", 0)
             )
 
-        print(
-            f"Recovery attempt "
-            f"{instruction.attempts}/"
-            f"{max_attempts}"
-        )
+            if max_attempts <= 0:
+                return False
 
-        self.overlay.close()
+            while instruction.attempts < max_attempts:
+                instruction.attempts += 1
 
-        if instruction.target:
-            self._highlight_target(
-                instruction.target
-            )
+                message = recovery.get("message")
 
-        return self._wait_for_completion(
-            instruction
-        )
+                if message:
+                    self.voice_manager.speak(
+                        str(message)
+                    )
+
+                print(
+                    f"Recovery attempt "
+                    f"{instruction.attempts}/"
+                    f"{max_attempts}"
+                )
+
+                self.overlay.close()
+
+                if instruction.target:
+                    self._highlight_target(
+                        instruction.target
+                    )
+
+                if self._wait_for_completion(
+                    instruction
+                ):
+                    return True
+
+            return False
 
     def _requires_screen_baseline(
         self,
