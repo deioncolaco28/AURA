@@ -2,15 +2,41 @@ import subprocess
 
 
 class ApplicationController:
-    """Controls launching desktop applications."""
+    """
+    Safely launches a predefined set of supported Windows applications.
 
-    def launch(self, application: str) -> None:
-        """Launch an application by its Windows command/name."""
+    AURA should not execute arbitrary user-provided shell commands.
+    Applications are resolved through a controlled registry.
+    """
 
-        if not application.strip():
+    APPLICATION_REGISTRY = {
+        "notepad": "notepad.exe",
+        "calculator": "calc.exe",
+        "calc": "calc.exe",
+        "paint": "mspaint.exe",
+        "explorer": "explorer.exe",
+        "file explorer": "explorer.exe",
+    }
+
+    def resolve(self, application: str) -> str:
+        if not application or not application.strip():
             raise ValueError("Application name cannot be empty.")
 
+        normalized = application.strip().lower()
+
+        executable = self.APPLICATION_REGISTRY.get(normalized)
+
+        if executable is None:
+            raise ValueError(
+                f"Unsupported application: {application}"
+            )
+
+        return executable
+
+    def launch(self, application: str) -> None:
+        executable = self.resolve(application)
+
         subprocess.Popen(
-            application,
-            shell=True,
+            [executable],
+            shell=False,
         )

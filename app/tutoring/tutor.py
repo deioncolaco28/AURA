@@ -166,24 +166,50 @@ class Tutor:
                 or "the application"
             )
 
+            display_name = {
+                "notepad": "Notepad",
+                "calc": "Calculator",
+                "mspaint": "Paint",
+                "explorer": "File Explorer",
+            }.get(
+                application.lower(),
+                application,
+            )
+
+            process = (
+                action.verification.get("process")
+                if isinstance(action.verification, dict)
+                else None
+            )
+
+            if not process:
+                process = {
+                    "notepad": "notepad.exe",
+                    "calc": "CalculatorApp.exe",
+                    "mspaint": "mspaint.exe",
+                    "explorer": "explorer.exe",
+                }.get(
+                    application.lower(),
+                    f"{application}.exe",
+                )
+
             return TutoringInstruction(
                 message=(
-                    f"Please open {application}. "
+                    f"Please open {display_name}. "
                     "I'll wait and confirm when it is running."
                 ),
-                target=application,
+                target=display_name,
                 action_type=ActionType.LAUNCH_APPLICATION,
                 completion={
-                    "application_running":
-                        f"{application}.exe"
+                    "application_running": f"{action.target}.exe"
                 },
                 success_message=(
-                    f"Perfect. {application} is now open."
+                    f"Perfect. {display_name} is now open."
                 ),
                 recovery={
                     "message": (
-                        f"I can't detect {application} yet. "
-                        "Please open it and I'll check again."
+                        f"I can't detect {display_name} yet. "
+                        f"Please open {display_name} and I'll check again."
                     ),
                     "max_attempts": 2,
                 },
