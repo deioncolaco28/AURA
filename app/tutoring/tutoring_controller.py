@@ -5,31 +5,24 @@ from app.perception.ocr import OCR, TesseractOCR
 from app.perception.screenshot import ScreenshotCapture
 from app.tutoring.instruction import TutoringInstruction
 from app.tutoring.overlay import HighlightOverlay
-from app.verification.application_verifier import (
-    ApplicationVerifier,
-)
-from app.verification.screen_verifier import (
-    ScreenVerifier,
-)
+from app.verification.application_verifier import ApplicationVerifier
 from app.voice.voice_manager import VoiceManager
 
 
 class TutoringController:
     """
-    Controls the interactive Show Me How experience.
+    Controls the interactive SHOW_ME_HOW experience.
 
-    AURA never performs the requested user action in this mode.
-
-    It:
-        - gives voice guidance
+    AURA:
+        - speaks instructions
         - observes the screen
-        - grounds visible targets
+        - detects UI targets
         - highlights targets
-        - detects completion
+        - waits for the user to perform the action
+        - verifies completion
         - provides recovery guidance
 
-    AURA does not click, type, or press keys on behalf
-    of the user in Show Me How mode.
+    AURA does NOT perform the user's requested action in tutoring mode.
     """
 
     def __init__(
@@ -41,49 +34,22 @@ class TutoringController:
         overlay: HighlightOverlay | None = None,
         poll_interval: float = 0.5,
         timeout: float = 30.0,
-        screen_verifier: ScreenVerifier | None = None,
         application_verifier: ApplicationVerifier | None = None,
         grounding_threshold: float = 0.65,
     ):
         self.voice_manager = voice_manager
-
         self.screenshot_capture = (
-            screenshot_capture
-            or ScreenshotCapture()
+            screenshot_capture or ScreenshotCapture()
         )
-
-        self.ocr = (
-            ocr
-            or TesseractOCR()
-        )
-
-        self.grounder = (
-            grounder
-            or UIGrounder()
-        )
-
-        self.overlay = (
-            overlay
-            or HighlightOverlay()
-        )
+        self.ocr = ocr or TesseractOCR()
+        self.grounder = grounder or UIGrounder()
+        self.overlay = overlay or HighlightOverlay()
 
         self.poll_interval = poll_interval
         self.timeout = timeout
-
         self.application_verifier = (
-            application_verifier
-            or ApplicationVerifier()
+            application_verifier or ApplicationVerifier()
         )
-
-        self.screen_verifier = (
-            screen_verifier
-            or ScreenVerifier(
-                screenshot_capture=self.screenshot_capture,
-                ocr=self.ocr,
-                grounder=self.grounder,
-            )
-        )
-
         self.grounding_threshold = grounding_threshold
 
         self._baseline_screen = None
@@ -92,13 +58,6 @@ class TutoringController:
         self,
         instructions: list[TutoringInstruction],
     ) -> bool:
-        """
-        Run tutoring instructions sequentially.
-
-        Returns True only when every tutoring step
-        is completed.
-        """
-
         if not instructions:
             self.voice_manager.speak(
                 "There are no instructions available."
@@ -112,8 +71,7 @@ class TutoringController:
             start=1,
         ):
             print(
-                f"\nTutoring step "
-                f"{index}/{total_steps}"
+                f"\nTutoring step {index}/{total_steps}"
             )
 
             completed = self._execute_instruction(
@@ -122,17 +80,15 @@ class TutoringController:
 
             if not completed:
                 print(
-                    "Tutoring step failed."
+                    f"Tutoring step {index} failed."
                 )
 
                 self.voice_manager.speak(
-                    "I could not confirm "
-                    "that you completed "
-                    "the step."
+                    "I could not confirm that "
+                    "you completed this step."
                 )
 
                 self.overlay.close()
-
                 return False
 
             instruction.completed = True
@@ -160,29 +116,29 @@ class TutoringController:
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """
-        Give the instruction and continuously observe
-        until the user completes it.
-        """
-
         instruction.attempts = 0
 
-        if self._requires_screen_baseline(
-            instruction
-        ):
+        # Capture the current complete screen before
+        # instructions that depend on a screen change.
+        if self._requires_screen_baseline(instruction):
             self._baseline_screen = (
-                self.screenshot_capture.capture()
+                self._capture_full_screen()
             )
 
+        # Speak BEFORE asking the user to act.
         self.voice_manager.speak(
             instruction.message
         )
 
+        # Highlight only after the instruction has been
+        # spoken, so the user can immediately see what
+        # AURA is referring to.
         if instruction.target:
             self._highlight_target(
                 instruction.target
             )
 
+        # SPEAK-only instructions are immediately complete.
         if instruction.action_type == "SPEAK":
             return True
 
@@ -201,11 +157,6 @@ class TutoringController:
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """
-        Continuously observe the screen until the
-        expected user action is detected.
-        """
-
         start_time = time.time()
 
         while (
@@ -229,46 +180,38 @@ class TutoringController:
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """Check whether the tutoring step is complete."""
-
         completion = instruction.completion
 
         if not completion:
             return False
 
         if "screen_contains" in completion:
-            target = completion[
-                "screen_contains"
-            ]
-
-            result = (
-                self.screen_verifier.contains_text(
-                    str(target)
-                )
+            target = str(
+                completion["screen_contains"]
             )
 
-            return result.success
+            return self._screen_contains_text(
+                target
+            )
 
         if "screen_not_contains" in completion:
-            target = completion[
-                "screen_not_contains"
-            ]
-
-            result = (
-                self.screen_verifier.does_not_contain_text(
-                    str(target)
-                )
+            target = str(
+                completion["screen_not_contains"]
             )
 
-            return result.success
+            return not self._screen_contains_text(
+                target
+            )
 
         if "screen_changed" in completion:
             current_screen = (
-                self.screenshot_capture.capture()
+                self._capture_full_screen()
             )
 
             if self._baseline_screen is None:
-                self._baseline_screen = current_screen
+                self._baseline_screen = (
+                    current_screen
+                )
                 return False
 
             return self._compare_screens(
@@ -276,41 +219,109 @@ class TutoringController:
                 current_screen,
             )
 
-        if "application_running" in completion:
-            process = completion[
-                "application_running"
-            ]
-
-            result = (
-                self.application_verifier.verify(
-                    str(process)
-                )
+        if completion.get("type") == "APPLICATION_RUNNING":
+            process = str(
+                completion.get("process", "")
             )
 
-            return result.success
+            if not process:
+                return False
+
+            result = self.application_verifier.verify(
+                process
+            )
+
+            return bool(result)
+
+        if "application_running" in completion:
+            process = str(
+                completion["application_running"]
+            )
+
+            result = self.application_verifier.verify(
+                process
+            )
+
+            return bool(result)
 
         if "target_disappears" in completion:
-            target = completion[
-                "target_disappears"
-            ]
-
-            result = (
-                self.screen_verifier.does_not_contain_text(
-                    str(target)
-                )
+            target = str(
+                completion["target_disappears"]
             )
 
-            return result.success
+            return not self._screen_contains_text(
+                target
+            )
 
         return False
+
+    def _capture_full_screen(self):
+        """
+        Capture the complete desktop.
+
+        This is intentionally used instead of
+        capture_foreground_window() because Windows
+        Start/Search is a shell surface and may not behave
+        like a normal foreground application window.
+        """
+        return self.screenshot_capture.capture()
+
+    def _screen_contains_text(
+        self,
+        target: str,
+    ) -> bool:
+        if not target or not target.strip():
+            return False
+
+        try:
+            image = self._capture_full_screen()
+
+            elements = self.ocr.detect_text(
+                image
+            )
+
+            if not elements:
+                return False
+
+            result = self.grounder.ground(
+                elements=elements,
+                target=target,
+            )
+
+            if not result.found:
+                return False
+
+            if (
+                result.score
+                < self.grounding_threshold
+            ):
+                print(
+                    f"Screen text match too weak: "
+                    f"{target} "
+                    f"(score={result.score:.2f})"
+                )
+                return False
+
+            print(
+                f"Screen text detected: "
+                f"{target} "
+                f"(score={result.score:.2f})"
+            )
+
+            return True
+
+        except Exception as error:
+            print(
+                f"Screen text verification error: "
+                f"{error}"
+            )
+            return False
 
     def _compare_screens(
         self,
         baseline,
         current,
     ) -> bool:
-        """Compare two screenshots."""
-
         try:
             from PIL import ImageChops
 
@@ -326,7 +337,8 @@ class TutoringController:
 
         except Exception as error:
             print(
-                f"Screen comparison error: {error}"
+                f"Screen comparison error: "
+                f"{error}"
             )
             return False
 
@@ -334,21 +346,25 @@ class TutoringController:
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """Retry an instruction using its recovery policy."""
-
         recovery = instruction.recovery
 
         if not recovery:
             return False
 
         max_attempts = int(
-            recovery.get("max_attempts", 0)
+            recovery.get(
+                "max_attempts",
+                0,
+            )
         )
 
         if max_attempts <= 0:
             return False
 
-        while instruction.attempts < max_attempts:
+        while (
+            instruction.attempts
+            < max_attempts
+        ):
             instruction.attempts += 1
 
             message = recovery.get(
@@ -361,7 +377,7 @@ class TutoringController:
                 )
 
             print(
-                f"Recovery attempt "
+                "Recovery attempt "
                 f"{instruction.attempts}/"
                 f"{max_attempts}"
             )
@@ -384,8 +400,6 @@ class TutoringController:
         self,
         instruction: TutoringInstruction,
     ) -> bool:
-        """Check whether screen-change detection is required."""
-
         return (
             "screen_changed"
             in instruction.completion
@@ -396,13 +410,13 @@ class TutoringController:
         target: str,
     ) -> None:
         """
-        Locate and highlight a target inside the
-        current foreground window.
+        Locate a tutoring target on the complete
+        desktop and highlight it.
 
-        OCR coordinates are converted from window-relative
-        coordinates into absolute screen coordinates.
+        Coordinates returned by OCR are already
+        screen coordinates because the screenshot
+        represents the entire screen.
         """
-
         if self.ocr is None:
             print(
                 "OCR is unavailable; "
@@ -410,28 +424,24 @@ class TutoringController:
             )
             return
 
+        if not target or not target.strip():
+            return
+
         try:
-            window_bounds = (
-                self.screenshot_capture
-                .get_foreground_window_bounds()
-            )
-
-            window_x = window_bounds[0]
-            window_y = window_bounds[1]
-
-            image = (
-                self.screenshot_capture
-                .capture_foreground_window()
-            )
+            image = self._capture_full_screen()
 
             elements = self.ocr.detect_text(
                 image
             )
 
+            print(
+                f"Full-screen OCR detected "
+                f"{len(elements)} element(s)."
+            )
+
             if not elements:
                 print(
-                    "No OCR elements detected "
-                    "in the foreground window."
+                    "No OCR elements detected."
                 )
                 return
 
@@ -442,13 +452,15 @@ class TutoringController:
 
             if not result.found:
                 print(
-                    f"Could not find tutoring target "
-                    f"in foreground window: "
-                    f"{target}"
+                    "Could not find tutoring "
+                    f"target: {target}"
                 )
                 return
 
-            if result.score < self.grounding_threshold:
+            if (
+                result.score
+                < self.grounding_threshold
+            ):
                 print(
                     f"Target match too weak: "
                     f"{target} "
@@ -458,14 +470,23 @@ class TutoringController:
 
             element = result.element
 
-            screen_x = (
-                window_x
-                + int(element.x)
+            if element is None:
+                print(
+                    "Grounding returned no element."
+                )
+                return
+
+            screen_x = int(element.x)
+            screen_y = int(element.y)
+
+            width = max(
+                int(element.width),
+                20,
             )
 
-            screen_y = (
-                window_y
-                + int(element.y)
+            height = max(
+                int(element.height),
+                20,
             )
 
             print(
@@ -476,24 +497,24 @@ class TutoringController:
             )
 
             print(
-                f"Window-relative coordinates: "
-                f"({element.x}, {element.y})"
+                "Screen coordinates: "
+                f"({screen_x}, {screen_y})"
             )
 
             print(
-                f"Screen coordinates: "
-                f"({screen_x}, {screen_y})"
+                "Highlight size: "
+                f"{width}x{height}"
             )
 
             self.overlay.show(
                 x=screen_x,
                 y=screen_y,
-                width=element.width,
-                height=element.height,
+                width=width,
+                height=height,
             )
 
         except Exception as error:
             print(
-                f"Tutoring target detection error: "
-                f"{error}"
+                "Tutoring target detection "
+                f"error: {error}"
             )

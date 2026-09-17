@@ -196,4 +196,7 @@ def test_grounder_find_text_returns_element():
         "Notepad",
     )
 
-    assert result == element
+    assert result.found is True
+    assert result.element == element
+    assert result.score >= 0.65
+    assert result.reason == "Exact text match."

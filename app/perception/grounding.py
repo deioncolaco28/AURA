@@ -5,460 +5,332 @@ from app.perception.ui_element import UIElement
 
 @dataclass
 class GroundingResult:
-    """Represents a grounded UI target."""
-
-    target: str
-    element: UIElement | object | None
-    score: float
-    reason: str
-
-    @property
-    def found(self) -> bool:
-        """Return whether a target was grounded."""
-
-        return self.element is not None
+    found: bool
+    element: UIElement | None = None
+    score: float = 0.0
+    reason: str = ""
 
 
 class UIGrounder:
     """
-    Finds the best UI element for a natural-language target.
+    Grounds a natural-language target against perceived UI elements.
 
-    Grounding considers:
-
-    1. Exact text
-    2. Text containment
-    3. Description
-    4. Word overlap
-    5. Element confidence
-    6. Fused OCR/VLM elements
-    7. Optional preferred screen region
-
-    The grounder remains compatible with both:
-        - UIElement
-        - legacy OCR TextElement
+    The grounder deliberately avoids matching unrelated or very short
+    OCR fragments against longer targets.
     """
+
+    MINIMUM_TARGET_LENGTH = 2
+    MINIMUM_CANDIDATE_LENGTH = 2
+    MINIMUM_MATCH_SCORE = 0.65
 
     def find_text(
         self,
         elements,
-        target: str,
+        target,
         preferred_region=None,
     ):
-        """Find a matching UI element."""
+        if not target or not target.strip():
+            return GroundingResult(
+                found=False,
+                reason="Empty target.",
+            )
 
-        result = self.ground(
-            elements,
-            target,
-            preferred_region=preferred_region,
+        target = target.strip()
+
+        candidates = [
+            element
+            for element in elements
+            if self._usable_candidate(element, target)
+        ]
+
+        if not candidates:
+            return GroundingResult(
+                found=False,
+                reason=f"No usable UI elements matched target '{target}'.",
+            )
+
+        best_result = GroundingResult(
+            found=False,
+            score=0.0,
+            reason="No sufficiently strong match.",
         )
 
-        return result.element
+        for element in candidates:
+            score, reason = self._score_element(
+                element,
+                target,
+            )
+
+            if preferred_region is not None:
+                score, reason = self._apply_region_context(
+                    score,
+                    reason,
+                    element,
+                    preferred_region,
+                )
+
+            if score > best_result.score:
+                best_result = GroundingResult(
+                    found=False,
+                    element=element,
+                    score=score,
+                    reason=reason,
+                )
+
+        # IMPORTANT:
+        # A candidate is not considered found merely because it exists.
+        # It must meet the minimum grounding confidence.
+        if best_result.score >= self.MINIMUM_MATCH_SCORE:
+            best_result.found = True
+        else:
+            best_result.found = False
+            best_result.reason = (
+                f"Match score too low: "
+                f"{best_result.score:.2f} < "
+                f"{self.MINIMUM_MATCH_SCORE:.2f}."
+            )
+
+        return best_result
 
     def ground(
         self,
         elements,
-        target: str,
+        target,
         preferred_region=None,
-    ) -> GroundingResult:
-        """
-        Find the best matching element.
-
-        preferred_region:
-            Optional tuple:
-                (x, y, width, height)
-
-            When supplied, elements outside this region
-            receive a penalty. This is useful for tutoring
-            scenarios where the relevant UI area is known.
-        """
-
-        normalized_target = self._normalize(
-            target
-        )
-
-        if not normalized_target:
-            return GroundingResult(
-                target=target,
-                element=None,
-                score=0.0,
-                reason="Target is empty.",
-            )
-
-        best_element = None
-        best_score = 0.0
-        best_reason = ""
-
-        for element in elements:
-
-            score, reason = (
-                self._score_element(
-                    element,
-                    normalized_target,
-                )
-            )
-
-            if preferred_region is not None:
-                score, reason = (
-                    self._apply_region_context(
-                        score,
-                        reason,
-                        element,
-                        preferred_region,
-                    )
-                )
-
-            if score > best_score:
-                best_element = element
-                best_score = score
-                best_reason = reason
-
-        if best_element is None:
-            return GroundingResult(
-                target=target,
-                element=None,
-                score=0.0,
-                reason="No suitable match found.",
-            )
-
-        return GroundingResult(
+    ):
+        return self.find_text(
+            elements=elements,
             target=target,
-            element=best_element,
-            score=best_score,
-            reason=best_reason,
+            preferred_region=preferred_region,
         )
+
+    def _usable_candidate(
+        self,
+        element,
+        target,
+    ):
+        candidate_text = str(
+            getattr(element, "text", "")
+        ).strip()
+
+        candidate_description = str(
+            getattr(element, "description", "")
+        ).strip()
+
+        candidate_type = str(
+            getattr(element, "element_type", "")
+        ).strip()
+
+        target_normalized = target.lower().strip()
+
+        candidate_values = [
+            candidate_text,
+            candidate_description,
+            candidate_type,
+        ]
+
+        # Prevent single-character OCR fragments such as
+        # "O" or "a" from matching longer targets such as "Notepad".
+        if len(target_normalized) >= 4:
+            if (
+                candidate_text
+                and len(candidate_text) < self.MINIMUM_CANDIDATE_LENGTH
+                and candidate_text.lower() != target_normalized
+            ):
+                return False
+
+        if candidate_text:
+            if not any(
+                character.isalnum()
+                for character in candidate_text
+            ):
+                return False
+
+        return any(candidate_values)
 
     def _score_element(
         self,
         element,
-        target: str,
-    ) -> tuple[float, str]:
-        """Score one UI element against a target."""
+        target,
+    ):
+        target_normalized = target.strip().lower()
 
-        candidates = []
+        text = str(
+            getattr(element, "text", "")
+        ).strip().lower()
 
-        text = getattr(
-            element,
-            "text",
-            None,
+        description = str(
+            getattr(element, "description", "")
+        ).strip().lower()
+
+        element_type = str(
+            getattr(element, "element_type", "")
+        ).strip().lower()
+
+        confidence = self._apply_confidence_bonus(element)
+
+        # Exact text is the strongest possible match.
+        if text == target_normalized:
+            return (
+                min(1.0, 1.0 + confidence),
+                "Exact text match.",
+            )
+
+        # Exact semantic description.
+        if description == target_normalized:
+            return (
+                min(1.0, 0.95 + confidence),
+                "Exact description match.",
+            )
+
+        # Target contained in OCR text.
+        if (
+            target_normalized in text
+            and len(text) >= len(target_normalized)
+        ):
+            return (
+                min(1.0, 0.85 + confidence),
+                "Target contained in text.",
+            )
+
+        # Target contained in semantic description.
+        if (
+            target_normalized in description
+            and len(description) >= len(target_normalized)
+        ):
+            return (
+                min(1.0, 0.80 + confidence),
+                "Target contained in description.",
+            )
+
+        # Candidate text contained in target.
+        #
+        # This is intentionally conservative because OCR can split or
+        # partially recognize words.
+        if text and len(text) >= 3 and text in target_normalized:
+            ratio = len(text) / len(target_normalized)
+
+            if ratio >= 0.50:
+                return (
+                    min(
+                        1.0,
+                        0.75 + confidence + (ratio * 0.05),
+                    ),
+                    "Meaningful candidate contained in target.",
+                )
+
+        # Meaningful word overlap.
+        target_words = set(
+            target_normalized.split()
         )
 
-        description = getattr(
-            element,
-            "description",
-            None,
+        candidate_words = set(
+            text.split()
         )
 
-        attributes = getattr(
-            element,
-            "attributes",
-            {},
-        )
-
-        if text:
-            candidates.append(
-                (
-                    text,
-                    "text",
-                )
+        if target_words and candidate_words:
+            overlap = (
+                len(target_words & candidate_words)
+                / len(target_words)
             )
 
-        if description:
-            candidates.append(
-                (
-                    description,
-                    "description",
+            if overlap >= 0.5:
+                return (
+                    min(
+                        1.0,
+                        0.65 + confidence + overlap * 0.05,
+                    ),
+                    "Meaningful word overlap.",
                 )
+
+        # Element type can only be a weak semantic match.
+        if (
+            element_type
+            and element_type == target_normalized
+        ):
+            return (
+                min(1.0, 0.50 + confidence),
+                "Element type match.",
             )
 
-        if attributes:
-            attribute_description = (
-                attributes.get(
-                    "description"
-                )
-            )
-
-            if attribute_description:
-                candidates.append(
-                    (
-                        attribute_description,
-                        "attribute description",
-                    )
-                )
-
-        best_score = 0.0
-        best_reason = "No meaningful match."
-
-        for candidate, source in candidates:
-
-            normalized_candidate = (
-                self._normalize(
-                    candidate
-                )
-            )
-
-            if not normalized_candidate:
-                continue
-
-            if (
-                normalized_candidate
-                == target
-            ):
-                score = 1.0
-
-                element_source = getattr(
-                    element,
-                    "source",
-                    None,
-                )
-
-                if element_source == "FUSED":
-                    reason = (
-                        f"Exact {source} match "
-                        "from fused perception."
-                    )
-                else:
-                    reason = (
-                        f"Exact {source} match."
-                    )
-
-                score = (
-                    self._apply_confidence_bonus(
-                        score,
-                        element,
-                    )
-                )
-
-                if score > best_score:
-                    best_score = score
-                    best_reason = reason
-
-                continue
-
-            if target in normalized_candidate:
-
-                score = 0.85
-
-                score = (
-                    self._apply_confidence_bonus(
-                        score,
-                        element,
-                    )
-                )
-
-                if score > best_score:
-                    best_score = score
-                    best_reason = (
-                        f"Target contained in "
-                        f"{source}."
-                    )
-
-                continue
-
-            if normalized_candidate in target:
-
-                score = 0.75
-
-                score = (
-                    self._apply_confidence_bonus(
-                        score,
-                        element,
-                    )
-                )
-
-                if score > best_score:
-                    best_score = score
-                    best_reason = (
-                        f"{source.capitalize()} "
-                        "contained in target."
-                    )
-
-                continue
-
-            target_words = set(
-                target.split()
-            )
-
-            candidate_words = set(
-                normalized_candidate.split()
-            )
-
-            if (
-                target_words
-                and candidate_words
-            ):
-
-                overlap = (
-                    len(
-                        target_words
-                        & candidate_words
-                    )
-                    / len(
-                        target_words
-                        | candidate_words
-                    )
-                )
-
-                if overlap >= 0.5:
-
-                    score = 0.65
-
-                    score = (
-                        self._apply_confidence_bonus(
-                            score,
-                            element,
-                        )
-                    )
-
-                    if score > best_score:
-                        best_score = score
-                        best_reason = (
-                            f"Strong word overlap "
-                            f"in {source}."
-                        )
-
+        # IMPORTANT:
+        # Unrelated candidates must remain below the threshold.
         return (
-            min(best_score, 1.0),
-            best_reason,
+            confidence,
+            "Low-confidence candidate.",
         )
+
+    def _apply_confidence_bonus(
+        self,
+        element,
+    ):
+        confidence = float(
+            getattr(element, "confidence", 0.0)
+        )
+
+        # OCR confidence is commonly 0-100.
+        if confidence > 1.0:
+            confidence /= 100.0
+
+        confidence = max(
+            0.0,
+            min(1.0, confidence),
+        )
+
+        bonus = min(
+            0.03,
+            confidence * 0.03,
+        )
+
+        if getattr(element, "source", "") == "FUSED":
+            bonus += 0.02
+
+        return bonus
 
     def _apply_region_context(
         self,
-        score: float,
-        reason: str,
+        score,
+        reason,
         element,
         preferred_region,
-    ) -> tuple[float, str]:
-        """
-        Apply optional spatial context.
-
-        Elements inside the preferred region retain
-        their original score.
-
-        Elements outside the preferred region receive
-        a penalty so that an equally good match inside
-        the relevant region is preferred.
-        """
-
+    ):
         if self._element_in_region(
             element,
             preferred_region,
         ):
-            return (
-                score,
-                f"{reason} Preferred region match.",
-            )
-
-        # Strongly reduce unrelated matches while
-        # preserving the element as a possible fallback.
-        adjusted_score = score * 0.50
+            return score, reason
 
         return (
-            adjusted_score,
-            f"{reason} Outside preferred region.",
+            score * 0.50,
+            reason + " Outside preferred region.",
         )
 
-    @staticmethod
     def _element_in_region(
+        self,
         element,
         region,
-    ) -> bool:
-        """
-        Check whether an element overlaps the preferred
-        region.
-
-        region = (x, y, width, height)
-        """
-
-        if not region or len(region) != 4:
+    ):
+        if not region:
             return True
 
         rx, ry, rw, rh = region
 
         ex = int(
             getattr(element, "x", 0)
-            or 0
         )
         ey = int(
             getattr(element, "y", 0)
-            or 0
         )
         ew = int(
             getattr(element, "width", 0)
-            or 0
         )
         eh = int(
             getattr(element, "height", 0)
-            or 0
         )
 
-        element_left = ex
-        element_top = ey
-        element_right = ex + ew
-        element_bottom = ey + eh
-
-        region_left = rx
-        region_top = ry
-        region_right = rx + rw
-        region_bottom = ry + rh
-
-        return (
-            element_right > region_left
-            and element_left < region_right
-            and element_bottom > region_top
-            and element_top < region_bottom
-        )
-
-    def _apply_confidence_bonus(
-        self,
-        score: float,
-        element,
-    ) -> float:
-        """
-        Slightly reward high-confidence perception.
-
-        Supports both UIElement and legacy OCR
-        TextElement objects.
-        """
-
-        confidence = float(
-            getattr(
-                element,
-                "confidence",
-                0.0,
-            )
-            or 0.0
-        )
-
-        # OCR confidence may be represented as a
-        # percentage such as 95.0 rather than 0-1.
-        if confidence > 1.0:
-            confidence /= 100.0
-
-        if confidence >= 0.90:
-            score += 0.03
-
-        elif confidence >= 0.75:
-            score += 0.02
-
-        if getattr(
-            element,
-            "source",
-            None,
-        ) == "FUSED":
-            score += 0.02
-
-        return min(
-            score,
-            1.0,
-        )
-
-    @staticmethod
-    def _normalize(
-        text: str | None,
-    ) -> str:
-        if not text:
-            return ""
-
-        return " ".join(
-            text.strip().lower().split()
+        return not (
+            ex + ew < rx
+            or ey + eh < ry
+            or ex > rx + rw
+            or ey > ry + rh
         )

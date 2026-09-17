@@ -1,31 +1,111 @@
 from abc import ABC, abstractmethod
 
+import subprocess
+
 
 class TextToSpeech(ABC):
-    """Interface for text-to-speech systems."""
-
     @abstractmethod
     def speak(self, text: str) -> None:
-        """Speak the provided text."""
         raise NotImplementedError
 
 
-import pyttsx3
-
-
 class Pyttsx3TTS(TextToSpeech):
-    """Local text-to-speech implementation using pyttsx3."""
+    """
+    Windows-native text-to-speech implementation.
+
+    Uses the Windows System.Speech synthesizer through
+    PowerShell instead of relying on pyttsx3's event loop.
+    """
 
     def __init__(self):
-        self.engine = pyttsx3.init()
+        self._powershell = self._find_powershell()
+
+    @staticmethod
+    def _find_powershell() -> str:
+        """
+        Locate Windows PowerShell.
+        """
+        candidates = [
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "powershell.exe",
+        ]
+
+        for candidate in candidates:
+            try:
+                result = subprocess.run(
+                    [candidate, "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+
+                if result.returncode == 0:
+                    return candidate
+
+            except Exception:
+                continue
+
+        raise RuntimeError(
+            "Windows PowerShell could not be found."
+        )
 
     def speak(self, text: str) -> None:
-        """Convert text into spoken audio."""
+        """
+        Speak the supplied text using Windows Speech.
+        """
 
-        if not text:
+        if not text or not text.strip():
             return
 
-        print(f"AURA: {text}")
+        message = text.strip()
 
-        self.engine.say(text)
-        self.engine.runAndWait()
+        print(f"AURA: {message}")
+
+        # Escape PowerShell string characters safely.
+        safe_message = (
+            message
+            .replace("`", "``")
+            .replace("'", "''")
+        )
+
+        command = f"""
+Add-Type -AssemblyName System.Speech
+$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$speaker.Volume = 100
+$speaker.Rate = 0
+$speaker.Speak('{safe_message}')
+$speaker.Dispose()
+"""
+
+        try:
+            result = subprocess.run(
+                [
+                    self._powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    command,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if result.returncode != 0:
+                print(
+                    "TTS playback failed:"
+                )
+                print(
+                    result.stderr.strip()
+                )
+
+        except subprocess.TimeoutExpired:
+            print(
+                "TTS playback timed out."
+            )
+
+        except Exception as error:
+            print(
+                f"TTS playback error: {error}"
+            )
