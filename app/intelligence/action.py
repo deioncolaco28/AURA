@@ -7,6 +7,8 @@ class ActionType:
 
     LAUNCH_APPLICATION = "LAUNCH_APPLICATION"
 
+    OPEN_URL = "OPEN_URL"
+
     CLICK = "CLICK"
 
     DOUBLE_CLICK = "DOUBLE_CLICK"

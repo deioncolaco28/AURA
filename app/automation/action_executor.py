@@ -1,5 +1,6 @@
 import time
 
+from app.automation.browser import BrowserController
 from app.automation.controller import ComputerController
 from app.intelligence.action import Action, ActionType
 
@@ -10,10 +11,16 @@ class ActionExecutor:
     def __init__(
         self,
         controller: ComputerController | None = None,
+        browser_controller: BrowserController | None = None,
     ):
         self.controller = (
             controller
             or ComputerController()
+        )
+
+        self.browser_controller = (
+            browser_controller
+            or BrowserController()
         )
 
     def execute(
@@ -26,6 +33,9 @@ class ActionExecutor:
 
         if action_type == ActionType.LAUNCH_APPLICATION:
             self._launch_application(action)
+
+        elif action_type == ActionType.OPEN_URL:
+            self._open_url(action)
 
         elif action_type == ActionType.CLICK:
             self._click(action)
@@ -71,6 +81,33 @@ class ActionExecutor:
                 1.0,
             )
         )
+
+    def _open_url(
+        self,
+        action: Action,
+    ) -> None:
+        if not action.target:
+            raise ValueError(
+                "OPEN_URL requires a target."
+            )
+
+        result = self.browser_controller.open_url(
+            action.target
+        )
+
+        action.execution_result.update(
+            {
+                "browser_success": result.success,
+                "url": result.url,
+                "message": result.message,
+            }
+        )
+
+        if not result.success:
+            raise RuntimeError(
+                result.message
+                or "Browser navigation failed."
+            )
 
     def _click(
         self,

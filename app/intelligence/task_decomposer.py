@@ -1,5 +1,6 @@
 from app.config.constants import AssistantMode
 from app.intelligence.action import Action, ActionType
+from urllib.parse import urlparse
 
 
 class RuleBasedTaskDecomposer:
@@ -53,6 +54,13 @@ class RuleBasedTaskDecomposer:
             return []
 
         normalized = goal.strip().lower()
+        browser_url = self._extract_url(goal)
+
+        if browser_url is not None:
+            return self._decompose_open_url(
+                browser_url,
+                    mode,
+                )
 
         # Preserve existing multi-step Notepad workflow.
         if "open notepad and type" in normalized:
@@ -77,6 +85,76 @@ class RuleBasedTaskDecomposer:
                     "However, this task is not currently supported."
                 ),
                 description="Explain unsupported task.",
+            )
+        ]
+
+    def _extract_url(
+        self,
+        goal: str,
+    ) -> str | None:
+        """
+        Extract a supported website URL from a user request.
+
+        Examples:
+            open https://example.com
+            open website https://example.com
+            go to https://example.com
+        """
+
+        words = goal.strip().split()
+
+        for word in words:
+            candidate = word.strip(
+                "\"'.,!?()[]{}"
+            )
+
+            if candidate.startswith(
+                (
+                    "http://",
+                    "https://",
+                )
+            ):
+                parsed = urlparse(candidate)
+
+                if parsed.scheme and parsed.netloc:
+                    return candidate
+
+        return None
+
+    def _decompose_open_url(
+        self,
+        url: str,
+        mode: str,
+    ) -> list[Action]:
+        """Create a browser navigation action."""
+
+        if mode == AssistantMode.SHOW_ME_HOW:
+            return [
+                Action(
+                    action_type=ActionType.SPEAK,
+                    value=(
+                        "I will show you how to open "
+                        "the requested website."
+                    ),
+                ),
+                Action(
+                    action_type=ActionType.SPEAK,
+                    value=(
+                        f"Please open {url} "
+                        "in your browser."
+                    ),
+                ),
+            ]
+
+        return [
+            Action(
+                action_type=ActionType.OPEN_URL,
+                target=url,
+                description=f"Open {url}.",
+                verification={
+                    "type": "BROWSER_URL",
+                    "url": url,
+                },
             )
         ]
 
