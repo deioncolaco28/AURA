@@ -94,6 +94,17 @@ class Agent:
         print(f"\nUser command: {text}")
 
         # --------------------------------------------------------------
+        # CANCELLATION COMMAND DETECTION
+        # --------------------------------------------------------------
+        if self._is_cancellation_command(text):
+            self.state.current_state = AssistantState.CANCELLED
+            self.logger.command_received("CANCELLED: " + text)
+            print("\nTask cancelled by user.")
+            self._speak("Task cancelled.")
+            self.state.current_state = AssistantState.IDLE
+            return None
+
+        # --------------------------------------------------------------
         # IMPORTANT:
         # Reject incomplete natural-language commands BEFORE planning.
         # This protects against IntentParser reducing:
@@ -128,7 +139,6 @@ class Agent:
         # --------------------------------------------------------------
         # UNDERSTANDING
         # --------------------------------------------------------------
-
         self.state.current_state = AssistantState.UNDERSTANDING
 
         intent = self.intent_parser.parse(text)
@@ -216,6 +226,21 @@ class Agent:
             task,
             intent.goal,
         )
+
+    @staticmethod
+    def _is_cancellation_command(text: str) -> bool:
+        """Detect user cancellation commands like 'stop', 'cancel', 'never mind'."""
+        normalized = " ".join(text.strip().lower().split())
+        cancellation_phrases = {
+            "stop",
+            "cancel",
+            "abort",
+            "never mind",
+            "nevermind",
+            "stop it",
+            "cancel task",
+        }
+        return normalized in cancellation_phrases
 
     # ------------------------------------------------------------------
     # INCOMPLETE COMMAND DETECTION
