@@ -52,6 +52,7 @@ class Agent:
         self.logger = logger or AURALogger()
         self.tutor = tutor
         self.tutoring_controller = tutoring_controller
+        self.interaction_history = None  # injected post-construction if needed
 
         if execution_engine is not None:
             self.execution_engine = execution_engine
@@ -289,22 +290,6 @@ class Agent:
         task,
         goal: str,
     ):
-        if self.voice_manager is None:
-            self.state.current_state = AssistantState.FAILED
-
-            error = (
-                "Tutoring mode requires a voice manager."
-            )
-
-            self.logger.task_failed(
-                goal,
-                error,
-            )
-
-            print(error)
-
-            return None
-
         try:
             if self.tutor is None:
                 from app.tutoring.tutor import Tutor

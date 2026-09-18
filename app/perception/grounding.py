@@ -1,6 +1,12 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.perception.ui_element import UIElement
+
+if TYPE_CHECKING:
+    from app.perception.target_query import TargetQuery
 
 
 @dataclass
@@ -103,6 +109,157 @@ class UIGrounder:
             target=target,
             preferred_region=preferred_region,
         )
+
+    # ------------------------------------------------------------------
+    # Extended: query-based grounding with spatial reasoning
+    # ------------------------------------------------------------------
+
+    def ground_with_query(
+        self,
+        elements,
+        query: "TargetQuery",
+    ) -> GroundingResult:
+        """
+        Resolve a TargetQuery against UI elements.
+
+        Delegates to SpatialReasoner for ordinal/relational queries.
+        Falls back to textual grounding for simple text queries.
+        """
+
+        from app.perception.spatial_reasoner import SpatialReasoner
+        from app.perception.target_query import (
+            RELATION_NEAREST,
+            RELATION_BESIDE,
+        )
+
+        reasoner = SpatialReasoner()
+
+        # ----------------------------------------------------------
+        # Ordinal query: "second item", "last result"
+        # ----------------------------------------------------------
+        if query.has_ordinal:
+            # Filter candidates by text/type/group first if specified.
+            candidates = self._filter_candidates(
+                elements, query
+            )
+
+            spatial = reasoner.resolve_ordinal(
+                candidates,
+                query.ordinal,
+            )
+
+            return GroundingResult(
+                found=spatial.found,
+                element=spatial.element,
+                score=spatial.score,
+                reason=spatial.reason,
+            )
+
+        # ----------------------------------------------------------
+        # Relational query: "option below Calculator"
+        # ----------------------------------------------------------
+        if query.has_relation:
+            # Find the reference element first.
+            reference_result = self.find_text(
+                elements=elements,
+                target=query.reference,
+            )
+
+            if not reference_result.found or reference_result.element is None:
+                return GroundingResult(
+                    found=False,
+                    reason=(
+                        f"Could not find reference element "
+                        f"'{query.reference}'."
+                    ),
+                )
+
+            reference_element = reference_result.element
+
+            # Candidates are all elements except the reference.
+            candidates = [
+                e for e in elements
+                if e is not reference_element
+            ]
+
+            # Filter by type/group if specified.
+            candidates = self._filter_candidates(
+                candidates, query
+            )
+
+            relation = query.relation.lower()
+
+            if relation in (RELATION_NEAREST, RELATION_BESIDE, "next to"):
+                spatial = reasoner.resolve_nearest(
+                    candidates,
+                    reference_element,
+                )
+            else:
+                spatial = reasoner.resolve_directional(
+                    candidates,
+                    relation,
+                    reference_element,
+                )
+
+            return GroundingResult(
+                found=spatial.found,
+                element=spatial.element,
+                score=spatial.score,
+                reason=spatial.reason,
+            )
+
+        # ----------------------------------------------------------
+        # Plain text query
+        # ----------------------------------------------------------
+        if query.text:
+            return self.find_text(
+                elements=elements,
+                target=query.text,
+            )
+
+        return GroundingResult(
+            found=False,
+            reason="TargetQuery has no resolvable component.",
+        )
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _filter_candidates(
+        elements,
+        query: "TargetQuery",
+    ) -> list:
+        """
+        Filter elements by element_type and/or group when specified.
+        Returns all elements when no filter is active.
+        """
+
+        result = list(elements)
+
+        if query.element_type:
+            et = query.element_type.lower()
+            filtered = [
+                e for e in result
+                if str(getattr(e, "element_type", "")).lower() == et
+            ]
+            if filtered:  # only apply filter when it yields results
+                result = filtered
+
+        if query.group:
+            g = query.group.lower()
+            filtered = [
+                e for e in result
+                if (
+                    str(getattr(e, "group", "") or "").lower() == g
+                    or str(getattr(e, "semantic_role", "") or "").lower() == g
+                )
+            ]
+            if filtered:  # only apply filter when it yields results
+                result = filtered
+
+        return result
 
     def _usable_candidate(
         self,

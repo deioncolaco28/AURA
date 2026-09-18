@@ -24,6 +24,31 @@ class UIElement:
         default_factory=dict
     )
 
+    # ------------------------------------------------------------------
+    # Optional derived / enrichment fields
+    #
+    # These are populated by perception enrichment passes (e.g. the
+    # SpatialReasoner or PerceptionManager).  All default to None so
+    # that existing UIElement construction sites remain valid without
+    # any changes.
+    # ------------------------------------------------------------------
+
+    #: Semantic role within the UI (e.g. "search_result", "menu_item").
+    semantic_role: str | None = None
+
+    #: Candidate group label (e.g. "button", "list_item", "option").
+    group: str | None = None
+
+    #: Row index within a detected grid/table (0-based, None if unknown).
+    row: int | None = None
+
+    #: Column index within a detected grid/table (0-based, None if unknown).
+    column: int | None = None
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
     @property
     def center(self) -> tuple[int, int]:
         return (

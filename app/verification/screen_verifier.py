@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.observation_diff import ObservationDiffer
 from app.perception.grounding import UIGrounder
 from app.perception.ocr import OCR, TesseractOCR
 from app.perception.screenshot import ScreenshotCapture
@@ -189,3 +190,190 @@ class ScreenVerifier:
             message="No screen verification required.",
             verification_type=verification_type,
         )
+
+    def verify_transition(
+        self,
+        before,
+        after,
+        expected: dict,
+    ) -> ScreenVerificationResult:
+        """
+        Verify that the expected state transition occurred between
+        two ScreenObservation instances.
+
+        This method distinguishes:
+            TARGET FOUND (presence alone)
+            vs
+            ACTION CAUSED EXPECTED STATE (actual transition)
+
+        Parameters
+        ----------
+        before : ScreenObservation
+            Baseline observation captured before user acted.
+        after : ScreenObservation
+            Observation captured after user acted.
+        expected : dict
+            Expected transition description. Supported keys:
+                process_starts : str   — process name that must appear
+                text_appears : str     — text that must be added
+                target_disappears : str — target that must disappear
+                screen_changed : bool  — any meaningful change occurred
+
+        Returns
+        -------
+        ScreenVerificationResult
+        """
+
+        differ = ObservationDiffer()
+        target = expected.get("target_disappears") or expected.get("text_appears")
+        diff = differ.compare(before, after, target=target)
+
+        # ----------------------------------------------------------
+        # Process started
+        # ----------------------------------------------------------
+        process_starts = expected.get("process_starts")
+        if process_starts:
+            proc_lower = str(process_starts).lower()
+            if proc_lower in diff.processes_started:
+                return ScreenVerificationResult(
+                    success=True,
+                    message=f"Process '{process_starts}' started.",
+                    verification_type="TRANSITION_VERIFIED",
+                    metadata={"processes_started": diff.processes_started},
+                )
+
+        # ----------------------------------------------------------
+        # Text appeared (was not present before)
+        # ----------------------------------------------------------
+        text_appears = expected.get("text_appears")
+        if text_appears:
+            text_lower = str(text_appears).strip().lower()
+            for added in diff.added_text:
+                if text_lower in added or added in text_lower:
+                    return ScreenVerificationResult(
+                        success=True,
+                        message=(
+                            f"Text '{text_appears}' appeared after action."
+                        ),
+                        verification_type="TRANSITION_VERIFIED",
+                        metadata={"added_text": diff.added_text},
+                    )
+
+        # ----------------------------------------------------------
+        # Target disappeared
+        # ----------------------------------------------------------
+        if expected.get("target_disappears") and diff.target_disappeared:
+            return ScreenVerificationResult(
+                success=True,
+                message=(
+                    f"Target '{target}' disappeared after action."
+                ),
+                verification_type="TRANSITION_VERIFIED",
+            )
+
+        # ----------------------------------------------------------
+        # Generic meaningful screen change
+        # ----------------------------------------------------------
+        if expected.get("screen_changed") and diff.any_change:
+            # Only accept if more than trivial noise.
+            if (
+                diff.process_change
+                or diff.window_title_changed
+                or len(diff.added_elements) >= 2
+                or len(diff.added_text) >= 2
+            ):
+                return ScreenVerificationResult(
+                    success=True,
+                    message="Meaningful screen change detected.",
+                    verification_type="TRANSITION_VERIFIED",
+                    metadata={
+                        "added_elements": len(diff.added_elements),
+                        "added_text": len(diff.added_text),
+                    },
+                )
+
+        return ScreenVerificationResult(
+            success=False,
+            message="Expected state transition not detected.",
+            verification_type="TRANSITION_NOT_VERIFIED",
+            metadata={
+                "diff_any_change": diff.any_change,
+                "processes_started": diff.processes_started,
+                "added_text": diff.added_text,
+            },
+        )
+
+    def verify_text_appeared(
+        self,
+        before,
+        after,
+        text: str,
+    ) -> ScreenVerificationResult:
+        """
+        Verify that specific text was ADDED between two observations.
+
+        CRITICAL: If the text was already present in the 'before'
+        observation, this method returns False.  This prevents
+        TYPE_TEXT false positives where the text existed before
+        the instruction was given.
+
+        Parameters
+        ----------
+        before : ScreenObservation
+            Baseline observation captured before user acted.
+        after : ScreenObservation
+            Observation captured after user acted.
+        text : str
+            The text that should have been typed/added.
+
+        Returns
+        -------
+        ScreenVerificationResult
+        """
+
+        if not text or not text.strip():
+            return ScreenVerificationResult(
+                success=False,
+                message="Text cannot be empty.",
+                verification_type="TEXT_APPEARED",
+            )
+
+        differ = ObservationDiffer()
+        diff = differ.compare(before, after)
+
+        text_lower = text.strip().lower()
+
+        # Check whether the text was added (appears in diff.added_text).
+        for added in diff.added_text:
+            if text_lower in added or added in text_lower:
+                return ScreenVerificationResult(
+                    success=True,
+                    message=(
+                        f"Text '{text}' was added after the baseline."
+                    ),
+                    verification_type="TEXT_APPEARED",
+                    metadata={"added_text": diff.added_text},
+                )
+
+        # Check whether the text was already present before.
+        before_texts = differ._element_texts(before)
+        was_already_there = any(
+            text_lower in t or t in text_lower
+            for t in before_texts
+        )
+
+        if was_already_there:
+            return ScreenVerificationResult(
+                success=False,
+                message=(
+                    f"Text '{text}' was already present before the action. "
+                    "Cannot confirm user typed it."
+                ),
+                verification_type="TEXT_APPEARED",
+            )
+
+        return ScreenVerificationResult(
+            success=False,
+            message=f"Text '{text}' was not found after the action.",
+            verification_type="TEXT_APPEARED",
+        )

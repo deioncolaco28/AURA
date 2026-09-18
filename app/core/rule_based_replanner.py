@@ -29,11 +29,13 @@ class RuleBasedReplanner(Replanner):
     def __init__(
         self,
         grounder: UIGrounder | None = None,
+        target_ranker=None,
     ):
         self.grounder = (
             grounder
             or UIGrounder()
         )
+        self.target_ranker = target_ranker
 
     def replan(
         self,
@@ -124,21 +126,39 @@ class RuleBasedReplanner(Replanner):
         if not target:
             return []
 
-        result = self.grounder.ground(
-            observation.elements,
-            target,
-        )
-
-        if not result.found:
-            return []
-
-        if (
-            result.score
-            < self.MIN_GROUNDING_SCORE
-        ):
-            return []
-
-        element = result.element
+        if self.target_ranker is not None:
+            from app.perception.target_query import TargetQuery
+            
+            query = TargetQuery(text=target)
+            ranking_result = self.target_ranker.rank(observation.elements, query)
+            
+            if not ranking_result.found:
+                return []
+            
+            if ranking_result.best.score < self.MIN_GROUNDING_SCORE:
+                return []
+                
+            element = ranking_result.best.element
+            score = ranking_result.best.score
+            reason = ranking_result.best.reason
+        else:
+            result = self.grounder.ground(
+                observation.elements,
+                target,
+            )
+    
+            if not result.found:
+                return []
+    
+            if (
+                result.score
+                < self.MIN_GROUNDING_SCORE
+            ):
+                return []
+    
+            element = result.element
+            score = result.score
+            reason = result.reason
 
         if element is None:
             return []
@@ -166,8 +186,8 @@ class RuleBasedReplanner(Replanner):
                 "y": y,
                 "width": element.width,
                 "height": element.height,
-                "grounding_score": result.score,
-                "grounding_reason": result.reason,
+                "grounding_score": score,
+                "grounding_reason": reason,
             },
             metadata={
                 "recovery": True,
