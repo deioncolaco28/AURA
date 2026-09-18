@@ -67,6 +67,16 @@ class EnvironmentCapability(Enum):
     APP_DETECT = auto()
     APP_VERIFY_RUNNING = auto()
 
+    # Content Intelligence
+    CONTENT_EXTRACT = auto()
+    CONTENT_SEARCH = auto()
+    CONTENT_SUMMARIZE = auto()
+    CONTENT_QA = auto()
+    CONTENT_CREATE_DOCX = auto()
+    CONTENT_CREATE_XLSX = auto()
+    CONTENT_CREATE_PPTX = auto()
+    CONTENT_ANALYZE_SHEET = auto()
+
 
 class Environment(ABC):
     """

@@ -149,6 +149,13 @@ class RuleBasedTaskDecomposer:
             if fs_actions:
                 return fs_actions
 
+        # ------------------------------------------------------------------
+        # Content Intelligence Workflows (PDF, DOCX, XLSX, PPTX, Web, QA)
+        # ------------------------------------------------------------------
+        content_actions = self._decompose_content(goal, mode)
+        if content_actions:
+            return content_actions
+
         browser_url = self._extract_url(goal)
 
         if browser_url is not None:
@@ -743,6 +750,175 @@ class RuleBasedTaskDecomposer:
                 verification={"type": "FS_EXISTS", "path": filename},
             ),
         ]
+
+    # ----------------------------------------------------------------------
+    # Content Intelligence Workflow Decomposition
+    # ----------------------------------------------------------------------
+
+    def _decompose_content(self, goal: str, mode: str) -> list[Action]:
+        normalized = goal.strip().lower()
+
+        # 1. Turn report into presentation / create presentation
+        # "turn this report into a presentation" / "create a presentation from this report"
+        if ("presentation" in normalized or "pptx" in normalized) and ("report" in normalized or "document" in normalized or "pdf" in normalized or "summariz" in normalized):
+            doc_target = "$report"
+            out_pptx = "presentation_summary.pptx"
+            return [
+                Action(
+                    action_id="act_extract_doc",
+                    action_type=ActionType.EXTRACT_DOCUMENT,
+                    target=doc_target,
+                    description=f"Extract content from '{doc_target}'.",
+                ),
+                Action(
+                    action_id="act_summarize_doc",
+                    action_type=ActionType.SUMMARIZE_DOCUMENT,
+                    target=doc_target,
+                    dependencies=["act_extract_doc"],
+                    description="Summarize extracted document.",
+                ),
+                Action(
+                    action_id="act_create_pptx",
+                    action_type=ActionType.CREATE_PPTX,
+                    target=out_pptx,
+                    dependencies=["act_summarize_doc"],
+                    description=f"Create presentation '{out_pptx}' from summary.",
+                    verification={"type": "FS_EXISTS", "path": out_pptx},
+                ),
+            ]
+
+        # 2. Summarize report and save as Word document
+        # "summarize the report and save it as a word document" / "summarize this and save as docx"
+        if "summariz" in normalized and ("save" in normalized or "export" in normalized or "into a word" in normalized or "into word" in normalized or "as a word" in normalized or "as word" in normalized or "to a word" in normalized or "to word" in normalized or "as docx" in normalized):
+            doc_target = "$report"
+            for word in goal.split():
+                if word.endswith(".pdf") or word.endswith(".docx") or word.endswith(".txt"):
+                    doc_target = word.strip("\"'.,")
+                    break
+
+            out_docx = "report_summary.docx"
+            return [
+                Action(
+                    action_id="act_extract_doc",
+                    action_type=ActionType.EXTRACT_DOCUMENT,
+                    target=doc_target,
+                    description=f"Extract content from '{doc_target}'.",
+                ),
+                Action(
+                    action_id="act_summarize_doc",
+                    action_type=ActionType.SUMMARIZE_DOCUMENT,
+                    target=doc_target,
+                    dependencies=["act_extract_doc"],
+                    description="Summarize extracted document.",
+                ),
+                Action(
+                    action_id="act_create_docx",
+                    action_type=ActionType.CREATE_DOCX,
+                    target=out_docx,
+                    dependencies=["act_summarize_doc"],
+                    description=f"Create Word document '{out_docx}' with summary.",
+                    verification={"type": "FS_EXISTS", "path": out_docx},
+                ),
+            ]
+
+        # 3. Read/summarize webpage
+        # "read this webpage and summarize it" / "summarize this webpage" / "read webpage"
+        if ("webpage" in normalized or "web page" in normalized or "page" in normalized) and ("read" in normalized or "summariz" in normalized):
+            return [
+                Action(
+                    action_id="act_extract_web",
+                    action_type=ActionType.EXTRACT_PAGE_CONTENT,
+                    target="active_browser",
+                    description="Extract readable content from active browser webpage.",
+                ),
+                Action(
+                    action_id="act_summarize_web",
+                    action_type=ActionType.SUMMARIZE_DOCUMENT,
+                    target="$active_webpage",
+                    dependencies=["act_extract_web"],
+                    description="Summarize extracted webpage content.",
+                ),
+            ]
+
+        # 4. Standalone Summarize PDF / Document
+        # "summarize this pdf" / "summarize report.pdf" / "summarize this document"
+        if "summariz" in normalized and ("pdf" in normalized or "report" in normalized or "document" in normalized or ".pdf" in normalized or ".docx" in normalized):
+            doc_target = "$report"
+            for word in goal.split():
+                if word.endswith(".pdf") or word.endswith(".docx") or word.endswith(".txt"):
+                    doc_target = word.strip("\"'.,")
+                    break
+
+            return [
+                Action(
+                    action_id="act_extract_doc",
+                    action_type=ActionType.EXTRACT_DOCUMENT,
+                    target=doc_target,
+                    description=f"Extract content from '{doc_target}'.",
+                ),
+                Action(
+                    action_id="act_summarize_doc",
+                    action_type=ActionType.SUMMARIZE_DOCUMENT,
+                    target=doc_target,
+                    dependencies=["act_extract_doc"],
+                    description="Summarize extracted document content.",
+                ),
+            ]
+
+        # 5. Spreadsheet Analysis / Statistics
+        # "find the highest AQI value in this spreadsheet" / "find highest value in spreadsheet"
+        if ("spreadsheet" in normalized or "xlsx" in normalized or "excel" in normalized or "sheet" in normalized) and ("highest" in normalized or "lowest" in normalized or "stat" in normalized or "average" in normalized or "count" in normalized or "sum" in normalized or "aqi" in normalized):
+            sheet_target = "$spreadsheet"
+            for word in goal.split():
+                if word.endswith(".xlsx") or word.endswith(".xls") or word.endswith(".csv"):
+                    sheet_target = word.strip("\"'.,")
+                    break
+
+            return [
+                Action(
+                    action_id="act_analyze_sheet",
+                    action_type=ActionType.ANALYZE_SHEET,
+                    target=sheet_target,
+                    description=f"Analyze spreadsheet data and compute summary statistics for '{sheet_target}'.",
+                )
+            ]
+
+        # 6. Document Grounded Q&A
+        # "what does the report say about X?" / "what does this document say about X?"
+        if normalized.startswith("what does ") and ("say about" in normalized or "discuss" in normalized or "mention" in normalized):
+            doc_target = "$report"
+            question = goal
+            return [
+                Action(
+                    action_id="act_qa_doc",
+                    action_type=ActionType.QA_DOCUMENT,
+                    target=doc_target,
+                    value=question,
+                    description=f"Answer question '{question}' grounded in '{doc_target}'.",
+                )
+            ]
+
+        # 7. Document Search
+        # "search the document for X" / "search document for X" / "find the section about X"
+        if "search" in normalized and ("document" in normalized or "pdf" in normalized or "report" in normalized) and ("for " in normalized or "about " in normalized):
+            query = "query"
+            if "for " in normalized:
+                query = goal.split("for ")[-1].strip("\"'.,")
+            elif "about " in normalized:
+                query = goal.split("about ")[-1].strip("\"'.,")
+
+            doc_target = "$report"
+            return [
+                Action(
+                    action_id="act_search_doc",
+                    action_type=ActionType.SEARCH_DOCUMENT,
+                    target=doc_target,
+                    value=query,
+                    description=f"Search '{doc_target}' for '{query}'.",
+                )
+            ]
+
+        return []
 
 
 class TaskDecomposer(RuleBasedTaskDecomposer):

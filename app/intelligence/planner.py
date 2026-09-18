@@ -137,6 +137,18 @@ class Planner:
             return "browser"
 
         if action_type in (
+            ActionType.EXTRACT_DOCUMENT,
+            ActionType.SUMMARIZE_DOCUMENT,
+            ActionType.SEARCH_DOCUMENT,
+            ActionType.QA_DOCUMENT,
+            ActionType.CREATE_DOCX,
+            ActionType.CREATE_XLSX,
+            ActionType.CREATE_PPTX,
+            ActionType.ANALYZE_SHEET,
+        ):
+            return "content"
+
+        if action_type in (
             ActionType.CREATE_FILE,
             ActionType.CREATE_FOLDER,
             ActionType.READ_FILE,
@@ -162,6 +174,10 @@ class Planner:
         vtype = str(v.get("type", "")).upper()
 
         expected = ExpectedState()
+
+        if action.action_type in (ActionType.CREATE_DOCX, ActionType.CREATE_XLSX, ActionType.CREATE_PPTX) and action.target:
+            expected.file_exists = action.target
+            return expected
 
         if vtype == "APPLICATION_RUNNING":
             procs = v.get("processes") or ([v["process"]] if "process" in v else [action.target])

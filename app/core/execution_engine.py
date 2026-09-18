@@ -234,7 +234,7 @@ class ExecutionEngine:
 
             try:
                 print(f"Action attempt {attempt}/{total_attempts}: {step.action.action_type}")
-                executed_action = self.execute_action(step.action)
+                executed_action = self.execute_action(step.action) or step.action
             except Exception as error:
                 step.error = str(error)
                 failure_info = self.failure_classifier.classify(

@@ -34,6 +34,20 @@ class FailureType:
     UNEXPECTED_STATE = "UNEXPECTED_STATE"
     VERIFICATION = "VERIFICATION_FAILURE"
 
+    # Content Intelligence
+    CONTENT_NOT_FOUND = "CONTENT_NOT_FOUND"
+    CONTENT_UNREADABLE = "CONTENT_UNREADABLE"
+    UNSUPPORTED_FORMAT = "UNSUPPORTED_FORMAT"
+    EXTRACTION_FAILED = "EXTRACTION_FAILED"
+    OCR_FAILED = "OCR_FAILED"
+    DOCUMENT_CORRUPTED = "DOCUMENT_CORRUPTED"
+    WORKBOOK_ERROR = "WORKBOOK_ERROR"
+    PRESENTATION_ERROR = "PRESENTATION_ERROR"
+    WEB_CONTENT_UNAVAILABLE = "WEB_CONTENT_UNAVAILABLE"
+    INSUFFICIENT_CONTENT = "INSUFFICIENT_CONTENT"
+    CONTENT_OPERATION_FAILED = "CONTENT_OPERATION_FAILED"
+    OUTPUT_VALIDATION_FAILED = "OUTPUT_VALIDATION_FAILED"
+
     # Execution & System
     ACTION_FAILED = "ACTION_FAILED"
     EXECUTION = "EXECUTION_FAILURE"
@@ -129,6 +143,19 @@ class FailureClassifier:
             ftype = FailureType.TIMEOUT
         elif "network" in err_str or "connection" in err_str or "dns" in err_str:
             ftype = FailureType.NETWORK_FAILURE
+        elif "unsupported format" in err_str or "unsupported file" in err_str:
+            ftype = FailureType.UNSUPPORTED_FORMAT
+            recoverable = False
+        elif "corrupted" in err_str or "failed to open" in err_str:
+            ftype = FailureType.DOCUMENT_CORRUPTED
+            recoverable = False
+        elif "extraction failed" in err_str or "could not extract" in err_str:
+            ftype = FailureType.EXTRACTION_FAILED
+        elif "insufficient" in err_str or "couldn't find enough information" in err_str:
+            ftype = FailureType.INSUFFICIENT_CONTENT
+            recoverable = False
+        elif "web content unavailable" in err_str:
+            ftype = FailureType.WEB_CONTENT_UNAVAILABLE
         elif "filesystem" in err_str or "file not found" in err_str or "directory" in err_str or "no such file" in err_str:
             ftype = FailureType.FILESYSTEM_ERROR
         elif "target not found" in err_str or "could not locate" in err_str or "element not found" in err_str:

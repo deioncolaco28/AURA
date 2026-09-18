@@ -1,17 +1,15 @@
-import time
-from typing import Any
-
 from app.automation.application_manager import ApplicationManager
 from app.automation.browser import BrowserController
 from app.automation.browser_manager import BrowserManager
 from app.automation.controller import ComputerController
 from app.automation.desktop_manager import DesktopManager
 from app.automation.filesystem_manager import FileSystemManager
+from app.content.content_manager import ContentManager
 from app.intelligence.action import Action, ActionType
 
 
 class ActionExecutor:
-    """Executes validated atomic computer actions across Desktop, Browser, Filesystem, and Applications."""
+    """Executes validated atomic computer actions across Desktop, Browser, Filesystem, Applications, and Content."""
 
     def __init__(
         self,
@@ -21,6 +19,7 @@ class ActionExecutor:
         application_manager: ApplicationManager | None = None,
         filesystem_manager: FileSystemManager | None = None,
         browser_manager: BrowserManager | None = None,
+        content_manager: ContentManager | None = None,
     ):
         self.controller = controller or ComputerController()
         self.browser_controller = browser_controller or BrowserController()
@@ -28,6 +27,7 @@ class ActionExecutor:
         self.application_manager = application_manager or ApplicationManager()
         self.filesystem_manager = filesystem_manager or FileSystemManager()
         self.browser_manager = browser_manager or BrowserManager(controller=self.browser_controller)
+        self.content_manager = content_manager or ContentManager()
 
     def execute(
         self,
@@ -125,6 +125,57 @@ class ActionExecutor:
             self._compress_files(action)
         elif action_type == ActionType.EXTRACT_ARCHIVE:
             self._extract_archive(action)
+
+        # Content Intelligence
+        elif action_type == ActionType.EXTRACT_DOCUMENT:
+            doc = self.content_manager.extract(action.target)
+            action.execution_result["document"] = doc
+            action.execution_result["extracted_text"] = doc.full_text
+            action.execution_result["word_count"] = doc.word_count
+        elif action_type == ActionType.SUMMARIZE_DOCUMENT:
+            max_points = action.parameters.get("max_points", 5)
+            section_filter = action.parameters.get("section_filter")
+            summary = self.content_manager.summarize(action.target, max_points=max_points, section_filter=section_filter)
+            action.execution_result["summary"] = summary
+            action.execution_result["summary_text"] = summary.summary_text
+            action.execution_result["key_points"] = summary.key_points
+        elif action_type == ActionType.SEARCH_DOCUMENT:
+            query = str(action.value or action.parameters.get("query", ""))
+            results = self.content_manager.search(action.target, query)
+            action.execution_result["search_results"] = results
+            action.execution_result["match_count"] = len(results)
+        elif action_type == ActionType.QA_DOCUMENT:
+            question = str(action.value or action.parameters.get("question", ""))
+            qa = self.content_manager.answer_question(action.target, question)
+            action.execution_result["qa_result"] = qa
+            action.execution_result["answer"] = qa.answer
+            action.execution_result["is_grounded"] = qa.is_grounded
+        elif action_type == ActionType.CREATE_DOCX:
+            title = action.parameters.get("title", "Document")
+            created = self.content_manager.create_document(
+                "DOCX",
+                action.target,
+                title=title,
+                content=action.value,
+                key_points=action.parameters.get("key_points"),
+            )
+            action.execution_result["created_path"] = created
+        elif action_type == ActionType.CREATE_XLSX:
+            headers = action.parameters.get("headers", [])
+            rows = action.parameters.get("rows", [])
+            created = self.content_manager.create_document("XLSX", action.target, headers=headers, rows=rows)
+            action.execution_result["created_path"] = created
+        elif action_type == ActionType.CREATE_PPTX:
+            title = action.parameters.get("title", "Presentation")
+            slides = action.parameters.get("slides")
+            key_points = action.parameters.get("key_points")
+            created = self.content_manager.create_document("PPTX", action.target, title=title, slides=slides, key_points=key_points)
+            action.execution_result["created_path"] = created
+        elif action_type == ActionType.ANALYZE_SHEET:
+            sheet_name = action.parameters.get("sheet_name")
+            col = action.parameters.get("column")
+            stats = self.content_manager.analyze_spreadsheet(action.target, sheet_name=sheet_name, column=col)
+            action.execution_result["stats"] = stats
 
         # Utility
         elif action_type == ActionType.WAIT:
