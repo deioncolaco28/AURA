@@ -126,8 +126,27 @@ class FailureClassifier:
         explanation = str(error or "")
         recoverable = True
 
-        # 1. Check explicit error message patterns
-        if "ambiguous" in err_str:
+        # 1. Non-retryable programming / syntax / system errors
+        if any(
+            err_marker in err_str
+            for err_marker in (
+                "nameerror",
+                "typeerror",
+                "syntaxerror",
+                "importerror",
+                "modulenotfounderror",
+                "attributeerror",
+                "valueerror",
+                "name '",
+                "not defined",
+                "invalid syntax",
+                "unsupported executable action",
+            )
+        ):
+            ftype = FailureType.ACTION_FAILED
+            recoverable = False
+        # 2. Check explicit error message patterns
+        elif "ambiguous" in err_str:
             ftype = FailureType.TARGET_AMBIGUOUS
             recoverable = False
         elif "permission" in err_str or "access denied" in err_str or "unauthorized" in err_str:

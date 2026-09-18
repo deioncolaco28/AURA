@@ -74,6 +74,25 @@ class ActionType:
     LOCATE = "LOCATE"
     HIGHLIGHT = "HIGHLIGHT"
     SPEAK = "SPEAK"
+    SAVE_DOCUMENT = "SAVE_DOCUMENT"
+
+
+class IdempotencyType:
+    """Action idempotency classification."""
+    IDEMPOTENT = "IDEMPOTENT"
+    CONDITIONALLY_IDEMPOTENT = "CONDITIONALLY_IDEMPOTENT"
+    NON_IDEMPOTENT = "NON_IDEMPOTENT"
+
+
+class StrategyType:
+    """Interaction strategy hierarchy."""
+    OS_API = "OS_API"
+    UIA = "UIA"
+    DOM = "DOM"
+    KEYBOARD_SHORTCUT = "KEYBOARD_SHORTCUT"
+    VISUAL_GROUNDING = "VISUAL_GROUNDING"
+    COORDINATE_MOUSE = "COORDINATE_MOUSE"
+    TRANSACTION = "TRANSACTION"
 
 
 @dataclass
@@ -96,6 +115,14 @@ class Action:
         default_factory=dict
     )
 
+    preconditions: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+    idempotency: str = IdempotencyType.CONDITIONALLY_IDEMPOTENT
+
+    selected_strategy: str = StrategyType.OS_API
+
     metadata: dict[str, Any] = field(
         default_factory=dict
     )
@@ -109,4 +136,4 @@ class Action:
     # Whole-PC workflow dependencies
     action_id: str | None = None
     dependencies: list[str] = field(default_factory=list)
-    prerequisites_met: bool = True
+    prerequisites_met: bool = True

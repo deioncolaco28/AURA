@@ -10,10 +10,16 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.automation.applications import (
+    find_process_windows,
+    find_standard_windows_path,
+    find_windows_app_path_in_registry,
+)
 from app.perception.foreground_detector import (
     ApplicationContext,
     ForegroundApplicationDetector,
@@ -89,11 +95,18 @@ class ApplicationManager:
             aliases=["mozilla", "mozilla firefox"],
             description="Mozilla Firefox Web Browser",
         ),
+        "terminal": AppRegistryEntry(
+            logical_name="Terminal",
+            executable="wt.exe",
+            process_names=["WindowsTerminal.exe", "wt.exe", "cmd.exe", "powershell.exe"],
+            aliases=["windows terminal", "the terminal", "terminal", "console"],
+            description="Windows Terminal / Console",
+        ),
         "cmd": AppRegistryEntry(
             logical_name="Command Prompt",
             executable="cmd.exe",
             process_names=["cmd.exe"],
-            aliases=["command prompt", "terminal", "command line", "dos"],
+            aliases=["command prompt", "command line", "dos"],
             description="Windows Command Prompt",
         ),
         "powershell": AppRegistryEntry(
@@ -179,53 +192,126 @@ class ApplicationManager:
 
         return None
 
+    def _resolve_executable_path(self, exe: str) -> str:
+        """Resolve executable to absolute path using PATH, Registry, and standard directories."""
+        if os.path.exists(exe):
+            return exe
+        if shutil.which(exe):
+            return exe
+        reg = find_windows_app_path_in_registry(exe)
+        if reg:
+            return reg
+        std = find_standard_windows_path(exe)
+        if std:
+            return std
+        return exe
+
     def launch(self, application: str, parameters: list[str] | None = None) -> subprocess.Popen:
         """Launch an application safely."""
         entry = self.resolve_application(application)
         args = parameters or []
+        app_lower = application.strip().lower()
 
         if entry:
-            executable = entry.executable
+            executable = self._resolve_executable_path(entry.executable)
             launch_cmd = [executable] + entry.launch_args + args
         else:
-            # Generic fallback for direct executable path
             clean_app = application.strip()
-            if clean_app.endswith(".exe") or os.path.exists(clean_app):
-                launch_cmd = [clean_app] + args
+            if clean_app.endswith(".exe") or os.path.exists(clean_app) or shutil.which(clean_app):
+                executable = self._resolve_executable_path(clean_app)
+                launch_cmd = [executable] + args
             else:
                 raise ValueError(f"Unknown or unsupported application: '{application}'.")
 
+        # Special handling for File Explorer to ensure a real GUI folder window opens
+        if "explorer" in app_lower or executable.lower().endswith("explorer.exe"):
+            if not args:
+                target_dir = os.environ.get("USERPROFILE", "C:\\")
+                launch_cmd = [executable, target_dir]
+
+        creation_flags = 0
+        if app_lower in ("powershell", "windows powershell", "cmd", "command prompt", "console"):
+            creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
+        elif "terminal" in app_lower and executable.lower().endswith(("powershell.exe", "cmd.exe")):
+            creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
+
         try:
-            process = subprocess.Popen(launch_cmd, shell=False)
+            if creation_flags:
+                process = subprocess.Popen(launch_cmd, creationflags=creation_flags, shell=False)
+            else:
+                process = subprocess.Popen(launch_cmd, shell=False)
             return process
         except Exception as exc:
             logger.error(f"Failed to launch application '{application}': {exc}")
             raise RuntimeError(f"Could not launch application '{application}': {exc}") from exc
 
+    def is_window_open(self, application: str) -> bool:
+        """
+        Check if an interactive GUI window is open for the given application.
+        Distinguishes desktop shell and background services from real application windows.
+        """
+        entry = self.resolve_application(application)
+        target_name = (entry.logical_name if entry else application).lower()
+        target_procs = entry.process_names if entry else [f"{application}.exe" if not application.endswith(".exe") else application]
+
+        # Special case for File Explorer:
+        if "explorer" in target_name or any("explorer" in p.lower() for p in target_procs):
+            wins = find_process_windows("explorer.exe")
+            for w in wins:
+                title = str(w.get("window_title", "")).lower()
+                has_gui = w.get("has_gui_window", bool(title and title not in ("program manager", "desktop", "shell_traywnd", "n/a", "olemainthreadwndname", "")))
+                if has_gui and title not in ("program manager", "desktop", "shell_traywnd", "n/a", "olemainthreadwndname", ""):
+                    return True
+            return False
+
+        # Special case for Terminal:
+        if "terminal" in target_name or any(p.lower() in ("terminal", "wt.exe", "windowsterminal.exe") for p in target_procs):
+            wt_wins = find_process_windows("WindowsTerminal.exe") + find_process_windows("wt.exe")
+            if wt_wins:
+                return True
+            ps_wins = find_process_windows("powershell.exe") + find_process_windows("cmd.exe")
+            curr_pid = os.getpid()
+            for w in ps_wins:
+                pid = w.get("pid", 0)
+                title = str(w.get("window_title", "")).lower()
+                has_gui = w.get("has_gui_window", bool(title and title not in ("n/a", "olemainthreadwndname", "")))
+                if pid != curr_pid and has_gui and title not in ("n/a", "olemainthreadwndname", ""):
+                    return True
+            return False
+
+        # For general applications:
+        for proc in target_procs:
+            wins = find_process_windows(proc)
+            if wins:
+                return True
+
+        return False
+
     def is_running(self, application: str) -> bool:
-        """Check if any process matching the application is currently running."""
+        """Check if an application is running / open."""
+        # For system shell (explorer) and terminal host, require actual GUI window to avoid false positives
+        app_lower = application.lower()
+        if "explorer" in app_lower or "terminal" in app_lower or app_lower in ("powershell", "cmd"):
+            return self.is_window_open(application)
+
+        # For other applications:
         entry = self.resolve_application(application)
         target_processes = entry.process_names if entry else [application]
         target_lower = [p.lower() for p in target_processes]
 
+        for proc in target_lower:
+            wins = find_process_windows(proc)
+            if wins:
+                return True
+
+        # Fallback to Windows tasklist command
         try:
-            import psutil  # type: ignore
-            for proc in psutil.process_iter(["name"]):
-                try:
-                    name = (proc.info.get("name") or "").lower()
-                    if any(t in name for t in target_lower):
-                        return True
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-        except ImportError:
-            # Fallback to Windows tasklist command
-            try:
-                output = subprocess.check_output("tasklist", shell=True, text=True)
-                for t in target_lower:
-                    if t in output.lower():
-                        return True
-            except Exception:
-                pass
+            output = subprocess.check_output("tasklist", shell=True, text=True)
+            for t in target_lower:
+                if t in output.lower():
+                    return True
+        except Exception:
+            pass
 
         return False
 

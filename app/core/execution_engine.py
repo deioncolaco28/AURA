@@ -284,7 +284,9 @@ class ExecutionEngine:
                             failure_type=failure_info.failure_type,
                         )
                     )
-                if attempt < total_attempts and failure_info.recoverability:
+                if not failure_info.recoverability:
+                    break
+                if attempt < total_attempts:
                     context.mark_recovering(step)
                 continue
 
@@ -361,7 +363,9 @@ class ExecutionEngine:
                             verification_result={"success": False, "error": str(error)},
                         )
                     )
-                if attempt < total_attempts and failure_info.recoverability:
+                if not failure_info.recoverability:
+                    break
+                if attempt < total_attempts:
                     context.mark_recovering(step)
 
         failure_type = step.verification.get("failure_type", FailureType.UNKNOWN)

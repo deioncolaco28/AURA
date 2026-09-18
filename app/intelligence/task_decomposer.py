@@ -1,7 +1,83 @@
+import re
 from urllib.parse import urlparse
 
 from app.config.constants import AssistantMode
 from app.intelligence.action import Action, ActionType
+
+
+def normalize_save_filename(raw_text: str, default_ext: str = ".txt") -> str:
+    """
+    Clean, extract, and normalize spoken save filename expressions.
+
+    Handles natural speech variations:
+        - 'save it as Aura' -> 'Aura.txt'
+        - 'save it as a Aura' -> 'Aura.txt'
+        - 'save it as an Aura' -> 'Aura.txt'
+        - 'save it as the Aura' -> 'Aura.txt'
+        - 'save it as Aura.txt' -> 'Aura.txt'
+        - 'save it as a report' -> 'report.txt'
+        - 'save it as an important report' -> 'important report.txt'
+        - 'save the file as my notes.docx' -> 'my notes.docx'
+        - 'save it with the name Aura' -> 'Aura.txt'
+        - 'save it under the name Aura' -> 'Aura.txt'
+    """
+    if not raw_text or not raw_text.strip():
+        return f"file{default_ext}"
+
+    name = raw_text.strip().strip("\"'.,;:!?")
+
+    # 1. Remove command prefix phrases if passed raw phrase
+    cmd_prefixes = (
+        "save the document with the name ",
+        "save the document under the name ",
+        "save the file with the name ",
+        "save the file under the name ",
+        "save it with the name ",
+        "save it under the name ",
+        "save with the name ",
+        "save under the name ",
+        "with the name ",
+        "under the name ",
+        "save the document as ",
+        "save the file as ",
+        "save this document as ",
+        "save this file as ",
+        "save this as ",
+        "save it as ",
+        "save as ",
+        "save ",
+    )
+    name_lower = name.lower()
+    for prefix in cmd_prefixes:
+        if name_lower.startswith(prefix):
+            name = name[len(prefix):].strip().strip("\"'.,;:!?")
+            name_lower = name.lower()
+            break
+
+    # 2. Strip leading grammatical articles ('a ', 'an ', 'the ') only when followed by actual name content
+    for article in ("a ", "an ", "the "):
+        if name_lower.startswith(article) and len(name) > len(article):
+            remainder = name[len(article):].strip()
+            if remainder:
+                name = remainder
+                name_lower = name.lower()
+            break
+
+    # 3. Strip invalid Windows filename characters
+    invalid_chars = '<>:"/\\|?*'
+    for ch in invalid_chars:
+        name = name.replace(ch, "")
+    name = name.strip()
+
+    if not name:
+        name = "file"
+
+    # 4. Handle extension: preserve explicit valid extensions
+    if "." in name and not name.endswith("."):
+        return name
+
+    ext = default_ext if default_ext.startswith(".") else f".{default_ext}"
+    return f"{name}{ext}"
 
 
 class RuleBasedTaskDecomposer:
@@ -88,6 +164,46 @@ class RuleBasedTaskDecomposer:
             "executable": "msedge",
             "process": "msedge.exe",
             "processes": ["msedge.exe"],
+        },
+        "terminal": {
+            "display_name": "Terminal",
+            "executable": "terminal",
+            "processes": ["WindowsTerminal.exe", "wt.exe", "cmd.exe", "powershell.exe"],
+        },
+        "the terminal": {
+            "display_name": "Terminal",
+            "executable": "terminal",
+            "processes": ["WindowsTerminal.exe", "wt.exe", "cmd.exe", "powershell.exe"],
+        },
+        "windows terminal": {
+            "display_name": "Windows Terminal",
+            "executable": "terminal",
+            "processes": ["WindowsTerminal.exe", "wt.exe"],
+        },
+        "cmd": {
+            "display_name": "Command Prompt",
+            "executable": "cmd",
+            "processes": ["cmd.exe"],
+        },
+        "command prompt": {
+            "display_name": "Command Prompt",
+            "executable": "cmd",
+            "processes": ["cmd.exe"],
+        },
+        "powershell": {
+            "display_name": "PowerShell",
+            "executable": "powershell",
+            "processes": ["powershell.exe", "pwsh.exe"],
+        },
+        "windows powershell": {
+            "display_name": "PowerShell",
+            "executable": "powershell",
+            "processes": ["powershell.exe", "pwsh.exe"],
+        },
+        "console": {
+            "display_name": "Command Prompt",
+            "executable": "cmd",
+            "processes": ["cmd.exe"],
         },
     }
 
@@ -201,12 +317,50 @@ class RuleBasedTaskDecomposer:
                 mode,
             )
 
-        # Preserve existing multi-step Notepad workflow.
-        if "open notepad and type" in normalized:
+        # Multi-step Notepad workflow (open, type, save).
+        if "notepad" in normalized and ("type" in normalized or "write" in normalized):
             return self._decompose_open_and_type(
                 goal,
                 mode,
             )
+
+        # Standalone Save operation: "save it as X", "save as X", "save file as X"
+        if (
+            normalized.startswith("save it as ")
+            or normalized.startswith("save as ")
+            or normalized.startswith("save file as ")
+            or normalized.startswith("save document as ")
+            or normalized.startswith("save this as ")
+            or normalized.startswith("save it with the name ")
+            or normalized.startswith("save it under the name ")
+        ):
+            fn = normalize_save_filename(goal, default_ext=".txt")
+            return [
+                Action(
+                    action_id="act_save_hotkey",
+                    action_type=ActionType.HOTKEY,
+                    value=["ctrl", "s"],
+                    parameters={"keys": ["ctrl", "s"]},
+                    description="Open Save dialog.",
+                ),
+                Action(
+                    action_id="act_save_filename",
+                    action_type=ActionType.TYPE_TEXT,
+                    value=fn,
+                    parameters={"text": fn},
+                    dependencies=["act_save_hotkey"],
+                    description=f"Type filename '{fn}'.",
+                ),
+                Action(
+                    action_id="act_save_confirm",
+                    action_type=ActionType.PRESS_KEY,
+                    value="enter",
+                    parameters={"key": "enter"},
+                    dependencies=["act_save_filename"],
+                    description=f"Confirm save as '{fn}'.",
+                    verification={"type": "FS_EXISTS", "path": fn},
+                ),
+            ]
 
         application = self._find_application(
             normalized
@@ -484,29 +638,60 @@ class RuleBasedTaskDecomposer:
         mode: str,
     ) -> list[Action]:
 
-        marker = "open notepad and type"
         normalized = goal.lower()
 
-        if marker not in normalized:
-            return []
+        # Check if save clause is present: "and save it as X", "then save it as X", "save as X", "save it as X"
+        save_markers = (
+            " and save it with the name ",
+            " and save it under the name ",
+            " then save it with the name ",
+            " then save it under the name ",
+            " and save it as ",
+            " then save it as ",
+            " and save the file as ",
+            " then save the file as ",
+            " and save this as ",
+            " then save this as ",
+            " and save as ",
+            " then save as ",
+            " save it as ",
+            " save as ",
+        )
+        save_filename = None
+        save_clause = None
+        for sm in save_markers:
+            if sm in normalized:
+                save_clause = sm
+                raw_filename = goal[normalized.index(sm) + len(sm):].strip().strip("\"'.,")
+                if raw_filename:
+                    save_filename = normalize_save_filename(raw_filename, default_ext=".txt")
+                break
 
-        text = goal[
-            normalized.index(marker) + len(marker):
-        ].strip()
+        # Extract text to type
+        type_markers = ("open notepad and type ", "open notepad type ", "type ", "write ")
+        text = ""
+        for tm in type_markers:
+            if tm in normalized:
+                start_idx = normalized.index(tm) + len(tm)
+                if save_clause and save_clause in normalized:
+                    end_idx = normalized.index(save_clause)
+                    text = goal[start_idx:end_idx].strip().strip("\"'")
+                else:
+                    text = goal[start_idx:].strip().strip("\"'")
+                break
 
-        text = text.strip("\"'")
-
-        if not text:
+        if not text and not save_filename:
             return self._decompose_open_application(
                 "notepad",
                 mode,
             )
 
-        # Preserve existing project test behavior.
-        text = text.title()
+        if not save_filename:
+            # Preserve existing project test behavior for simple open & type
+            text = text.title()
 
         if mode == AssistantMode.SHOW_ME_HOW:
-            return [
+            tutoring_actions = [
                 Action(
                     action_type=ActionType.SPEAK,
                     value=(
@@ -553,9 +738,11 @@ class RuleBasedTaskDecomposer:
                     },
                 ),
             ]
+            return tutoring_actions
 
-        return [
+        actions = [
             Action(
+                action_id="act_open_notepad",
                 action_type=ActionType.LAUNCH_APPLICATION,
                 target="notepad",
                 description="Launch Notepad.",
@@ -567,8 +754,10 @@ class RuleBasedTaskDecomposer:
                 },
             ),
             Action(
+                action_id="act_type_text",
                 action_type=ActionType.TYPE_TEXT,
                 value=text,
+                dependencies=["act_open_notepad"],
                 description=(
                     f"Type '{text}' into Notepad."
                 ),
@@ -578,6 +767,39 @@ class RuleBasedTaskDecomposer:
                 },
             ),
         ]
+
+        if save_filename:
+            actions.extend(
+                [
+                    Action(
+                        action_id="act_save_hotkey",
+                        action_type=ActionType.HOTKEY,
+                        value=["ctrl", "s"],
+                        parameters={"keys": ["ctrl", "s"]},
+                        dependencies=["act_type_text"],
+                        description="Open Save dialog.",
+                    ),
+                    Action(
+                        action_id="act_save_filename",
+                        action_type=ActionType.TYPE_TEXT,
+                        value=save_filename,
+                        parameters={"text": save_filename},
+                        dependencies=["act_save_hotkey"],
+                        description=f"Type filename '{save_filename}'.",
+                    ),
+                    Action(
+                        action_id="act_save_confirm",
+                        action_type=ActionType.PRESS_KEY,
+                        value="enter",
+                        parameters={"key": "enter"},
+                        dependencies=["act_save_filename"],
+                        description=f"Confirm save as '{save_filename}'.",
+                        verification={"type": "FS_EXISTS", "path": save_filename},
+                    ),
+                ]
+            )
+
+        return actions
 
     # ----------------------------------------------------------------------
     # Filesystem Decomposition

@@ -105,6 +105,45 @@ class Agent:
             return None
 
         # --------------------------------------------------------------
+        # CONVERSATIONAL / INFORMATIONAL / GREETING HANDLERS
+        # --------------------------------------------------------------
+        norm_clean = " ".join(text.strip().lower().split())
+        if norm_clean in (
+            "what can you do",
+            "what can you do?",
+            "what are your capabilities",
+            "help",
+            "who are you",
+            "what is aura",
+            "what can aura do",
+        ):
+            self.logger.command_received("CAPABILITIES_QUERY: " + text)
+            msg = (
+                "I can help you open applications, navigate websites, "
+                "manage files and folders, extract and summarize documents, "
+                "perform spreadsheet analysis, and guide you step-by-step in tutoring mode."
+            )
+            self._speak(msg)
+            self.state.current_state = AssistantState.IDLE
+            return None
+
+        if norm_clean in (
+            "hello",
+            "hi",
+            "hey",
+            "good morning",
+            "good afternoon",
+            "good evening",
+            "hello aura",
+            "hi aura",
+        ):
+            self.logger.command_received("GREETING: " + text)
+            msg = "Hello! I am AURA, your automated assistant. How can I help you today?"
+            self._speak(msg)
+            self.state.current_state = AssistantState.IDLE
+            return None
+
+        # --------------------------------------------------------------
         # IMPORTANT:
         # Reject incomplete natural-language commands BEFORE planning.
         # This protects against IntentParser reducing:
@@ -283,6 +322,17 @@ class Agent:
         task,
         goal: str,
     ):
+        # If the task is an unsupported explanation action, speak it and exit truthfully as FAILED without saying "Task completed"
+        if (
+            len(task.actions) == 1
+            and task.actions[0].action_type == ActionType.SPEAK
+            and "not currently supported" in str(task.actions[0].value).lower()
+        ):
+            self._execute_action(task.actions[0])
+            self.state.current_state = AssistantState.FAILED
+            self.logger.task_failed(goal, "Task is unsupported.")
+            return None
+
         self.state.current_state = AssistantState.ACTING
 
         context = self.execution_engine.run(task)

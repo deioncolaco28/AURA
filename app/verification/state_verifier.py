@@ -7,8 +7,10 @@ Unified state verifier multiplexing across Application, Browser, Filesystem, and
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
+
 
 from app.verification.application_verifier import ApplicationVerifier
 from app.verification.filesystem_verifier import FileSystemVerifier
@@ -136,9 +138,18 @@ class StateVerifier:
         # -------------------------------------------------------------
         # 3. Filesystem State Transitions
         # -------------------------------------------------------------
-        if vtype in ("FS_EXISTS", "FILE_EXISTS", "FOLDER_EXISTS"):
+        if vtype in ("FS_EXISTS", "FILE_EXISTS", "FOLDER_EXISTS", "SAVE_DOCUMENT"):
             path = spec.get("path") or spec.get("target", "")
+            # Check direct filesystem
             ok, msg = self.filesystem_verifier.verify_create(path)
+            if not ok and path and not os.path.isabs(path):
+                # Check user profile documents/desktop as fallback
+                user_p = os.environ.get("USERPROFILE", "")
+                for fb in (os.path.join(user_p, "Documents", path), os.path.join(user_p, "Desktop", path), os.path.join(os.getcwd(), path)):
+                    if os.path.exists(fb):
+                        ok = True
+                        msg = f"File '{path}' found at '{fb}'."
+                        break
             return StateVerificationResult(verified=ok, verification_type=vtype, message=msg)
 
         if vtype in ("FS_DELETED", "FILE_DELETED"):
@@ -203,3 +214,4 @@ class StateVerifier:
             verification_type=vtype,
             message=f"Default verification passed for '{vtype}'.",
         )
+

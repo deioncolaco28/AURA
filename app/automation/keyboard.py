@@ -17,7 +17,12 @@ class KeyboardController:
 
         pyautogui.press(key)
 
+    def press_key(self, key: str) -> None:
+        """Press a single key (alias for press)."""
+
+        self.press(key)
+
     def hotkey(self, *keys: str) -> None:
         """Press a keyboard shortcut."""
 
-        pyautogui.hotkey(*keys)
+        pyautogui.hotkey(*keys)

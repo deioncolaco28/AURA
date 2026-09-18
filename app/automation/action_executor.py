@@ -1,3 +1,5 @@
+import time
+
 from app.automation.application_manager import ApplicationManager
 from app.automation.browser import BrowserController
 from app.automation.browser_manager import BrowserManager
@@ -97,6 +99,16 @@ class ActionExecutor:
             self._press_key(action)
         elif action_type == ActionType.HOTKEY:
             self._hotkey(action)
+        elif action_type == ActionType.SAVE_DOCUMENT:
+            from app.automation.gui_transaction_engine import GUITransactionEngine
+            engine = GUITransactionEngine()
+            fn = str(action.value or action.target or "document.txt")
+            res = engine.execute_save_transaction(fn, target_dir=action.parameters.get("target_dir"))
+            action.execution_result["transaction_result"] = res
+            action.execution_result["created_file"] = res.created_file
+            if not res.success:
+                raise RuntimeError(res.message)
+
 
         # FileSystem
         elif action_type == ActionType.CREATE_FILE:
@@ -329,16 +341,29 @@ class ActionExecutor:
                 "requires a target."
             )
 
+        # Idempotency safeguard: if application is already running, focus it instead of launching duplicate instances
+        force_launch = action.parameters.get("force_launch", False)
+        if not force_launch:
+            try:
+                if self.application_manager.is_running(action.target):
+                    self.application_manager.focus(action.target)
+                    action.execution_result["idempotent_focus"] = True
+                    return
+            except Exception:
+                pass
+
         self.controller.launch_application(
             action.target
         )
 
-        time.sleep(
+        startup_wait = float(
             action.parameters.get(
                 "startup_wait",
-                1.0,
+                0.5,
             )
         )
+        if startup_wait > 0:
+            time.sleep(startup_wait)
 
     def _open_url(
         self,

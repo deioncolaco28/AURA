@@ -1,5 +1,7 @@
+import os
 import subprocess
 
+from app.automation.applications import find_process_windows
 from app.verification.verifier import (
     VerificationResult,
     Verifier,
@@ -100,8 +102,49 @@ class ApplicationVerifier(Verifier):
         self,
         processes: list[str],
     ) -> str | None:
+        # Check if we are verifying File Explorer or Terminal specially
+        is_explorer_check = any("explorer" in p.lower() for p in processes)
+        is_terminal_check = any(p.lower() in ("terminal", "wt.exe", "windowsterminal.exe", "powershell.exe", "cmd.exe") for p in processes)
 
         for process in processes:
+            p_lower = process.lower()
+
+            # For File Explorer: must verify an actual GUI window is open, NOT just background shell
+            if "explorer" in p_lower:
+                wins = find_process_windows("explorer.exe")
+                for w in wins:
+                    title = str(w.get("window_title", "")).lower()
+                    has_gui = w.get("has_gui_window", bool(title and title not in ("program manager", "desktop", "shell_traywnd", "n/a", "olemainthreadwndname", "")))
+                    if has_gui and title not in ("program manager", "desktop", "shell_traywnd", "n/a", "olemainthreadwndname", ""):
+                        return "explorer.exe"
+                continue
+
+            # For Terminal / PowerShell / CMD:
+            if p_lower in ("terminal", "wt.exe", "windowsterminal.exe"):
+                wt_wins = find_process_windows("WindowsTerminal.exe") + find_process_windows("wt.exe")
+                if wt_wins:
+                    return "wt.exe"
+                continue
+
+            if p_lower in ("powershell.exe", "cmd.exe", "powershell", "cmd"):
+                clean_p = process if process.endswith(".exe") else f"{process}.exe"
+                wins = find_process_windows(clean_p)
+                curr_pid = os.getpid()
+                for w in wins:
+                    pid = w.get("pid", 0)
+                    title = str(w.get("window_title", "")).lower()
+                    has_gui = w.get("has_gui_window", bool(title and title not in ("n/a", "olemainthreadwndname", "")))
+                    if pid != curr_pid and has_gui and title not in ("n/a", "olemainthreadwndname", ""):
+                        return process
+                continue
+
+            # For general applications (notepad, calc, chrome, etc.):
+            clean_p = process if process.endswith(".exe") else f"{process}.exe"
+            wins = find_process_windows(clean_p)
+            if wins:
+                return process
+
+            # Fallback to tasklist /FI
             try:
                 result = subprocess.run(
                     [
@@ -113,14 +156,10 @@ class ApplicationVerifier(Verifier):
                     text=True,
                     check=False,
                 )
-
+                if process.lower() in result.stdout.lower():
+                    return process
             except Exception:
                 continue
-
-            if process.lower() in (
-                result.stdout.lower()
-            ):
-                return process
 
         return None
 
