@@ -52,14 +52,42 @@ class RuleBasedReplanner(Replanner):
             return []
 
         if failure is not None:
-            if failure.failure_type == (
-                FailureType.VERIFICATION
-            ):
+            if failure.failure_type == FailureType.VERIFICATION:
                 return self._replan_verification_failure(
                     failed_action,
                     observation,
                     failure,
                 )
+            if failure.failure_type == FailureType.APPLICATION_NOT_FOREGROUND:
+                app_target = failure.metadata.get("app_name") or failed_action.target or "application"
+                return [
+                    Action(
+                        action_type=ActionType.FOCUS_APPLICATION,
+                        target=app_target,
+                        description=f"Switch focus back to '{app_target}'.",
+                    ),
+                    failed_action,
+                ]
+            if failure.failure_type == FailureType.APPLICATION_NOT_RUNNING:
+                app_target = failure.metadata.get("app_name") or failed_action.target or "application"
+                return [
+                    Action(
+                        action_type=ActionType.LAUNCH_APPLICATION,
+                        target=app_target,
+                        description=f"Launch '{app_target}'.",
+                    ),
+                    Action(action_type=ActionType.WAIT, parameters={"seconds": 1.0}),
+                    failed_action,
+                ]
+            if failure.failure_type == FailureType.TARGET_AMBIGUOUS:
+                q = failure.metadata.get("clarification_question") or f"Which {failed_action.target} did you mean?"
+                return [
+                    Action(
+                        action_type=ActionType.SPEAK,
+                        value=q,
+                        description="Ask user for clarification.",
+                    )
+                ]
 
         if failed_action.action_type in (
             ActionType.CLICK,

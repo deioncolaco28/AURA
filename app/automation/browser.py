@@ -158,6 +158,121 @@ class BrowserController:
             _get_title
         )
 
+    def get_url(self) -> str:
+        def _get_url():
+            if self.page is None:
+                return ""
+            return self.page.url
+        return self._run_on_browser_thread(_get_url)
+
+    def is_available(self) -> bool:
+        if self._closed:
+            return False
+        return True
+
+    def navigate(self, url: str) -> BrowserResult:
+        return self.open_url(url)
+
+    def back(self) -> None:
+        def _back():
+            if self.page:
+                self.page.go_back()
+        self._run_on_browser_thread(_back)
+
+    def forward(self) -> None:
+        def _forward():
+            if self.page:
+                self.page.go_forward()
+        self._run_on_browser_thread(_forward)
+
+    def refresh(self) -> None:
+        def _refresh():
+            if self.page:
+                self.page.reload()
+        self._run_on_browser_thread(_refresh)
+
+    def click(self, target: str) -> None:
+        def _click():
+            page = self._start_on_worker()
+            # Try selector, then text selector
+            try:
+                page.click(target, timeout=2000)
+            except Exception:
+                page.click(f"text={target}", timeout=3000)
+        self._run_on_browser_thread(_click)
+
+    def type_text(self, target: str, text: str) -> None:
+        def _type():
+            page = self._start_on_worker()
+            try:
+                page.fill(target, text, timeout=2000)
+            except Exception:
+                page.fill(f"text={target}", text, timeout=3000)
+        self._run_on_browser_thread(_type)
+
+    def submit(self, target: str | None = None) -> None:
+        def _submit():
+            page = self._start_on_worker()
+            if target:
+                try:
+                    page.press(target, "Enter")
+                except Exception:
+                    page.keyboard.press("Enter")
+            else:
+                page.keyboard.press("Enter")
+        self._run_on_browser_thread(_submit)
+
+    def scroll(self, delta: int) -> None:
+        def _scroll():
+            page = self._start_on_worker()
+            page.mouse.wheel(0, delta)
+        self._run_on_browser_thread(_scroll)
+
+    def open_tab(self, url: str | None = None) -> Any:
+        def _new_tab():
+            if self.browser is None:
+                self._start_on_worker()
+            context = self.browser.contexts[0] if self.browser.contexts else self.browser.new_context()
+            new_p = context.new_page()
+            self.page = new_p
+            if url:
+                new_p.goto(url, wait_until="domcontentloaded")
+            return new_p
+        return self._run_on_browser_thread(_new_tab)
+
+    def close_tab(self, index: int | None = None) -> None:
+        def _close_tab():
+            if not self.browser or not self.browser.contexts:
+                return
+            context = self.browser.contexts[0]
+            pages = context.pages
+            if pages:
+                target_page = pages[index] if (index is not None and 0 <= index < len(pages)) else pages[-1]
+                target_page.close()
+                if context.pages:
+                    self.page = context.pages[-1]
+                else:
+                    self.page = None
+        self._run_on_browser_thread(_close_tab)
+
+    def switch_tab(self, index: int) -> None:
+        def _switch_tab():
+            if not self.browser or not self.browser.contexts:
+                return
+            context = self.browser.contexts[0]
+            pages = context.pages
+            if 0 <= index < len(pages):
+                self.page = pages[index]
+                self.page.bring_to_front()
+        self._run_on_browser_thread(_switch_tab)
+
+    def extract_content(self) -> str:
+        def _extract():
+            if not self.page:
+                return ""
+            return self.page.inner_text("body")
+        return self._run_on_browser_thread(_extract)
+
     # ------------------------------------------------------------------
     # CLOSE
     # ------------------------------------------------------------------

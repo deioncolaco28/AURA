@@ -113,6 +113,42 @@ class RuleBasedTaskDecomposer:
         if self._is_incomplete_request(normalized):
             return []
 
+        # ------------------------------------------------------------------
+        # Cross-App Workflow: Chrome search and save to file
+        # "open chrome, search for X, and save to Y"
+        # ------------------------------------------------------------------
+        if "chrome" in normalized and "search for" in normalized and ("save" in normalized or "text file" in normalized):
+            return self._decompose_chrome_search_and_save(goal, mode)
+
+        # ------------------------------------------------------------------
+        # Cross-App Workflow: Chrome search
+        # "open chrome and search for X"
+        # ------------------------------------------------------------------
+        if "chrome" in normalized and "search for" in normalized:
+            return self._decompose_chrome_search(goal, mode)
+
+        # ------------------------------------------------------------------
+        # Filesystem / File Explorer Workflows
+        # ------------------------------------------------------------------
+        if (
+            "create folder" in normalized
+            or "create a folder" in normalized
+            or "create directory" in normalized
+            or "make folder" in normalized
+            or "create file" in normalized
+            or "create a file" in normalized
+            or "rename " in normalized
+            or "move " in normalized
+            or "copy " in normalized
+            or "delete file" in normalized
+            or "delete " in normalized
+            or "search files" in normalized
+            or "search for" in normalized and "file" in normalized
+        ):
+            fs_actions = self._decompose_filesystem(goal, mode)
+            if fs_actions:
+                return fs_actions
+
         browser_url = self._extract_url(goal)
 
         if browser_url is not None:
@@ -486,6 +522,225 @@ class RuleBasedTaskDecomposer:
                     "type": "SCREEN_CONTAINS_TEXT",
                     "text": text,
                 },
+            ),
+        ]
+
+    # ----------------------------------------------------------------------
+    # Filesystem Decomposition
+    # ----------------------------------------------------------------------
+
+    def _decompose_filesystem(self, goal: str, mode: str) -> list[Action]:
+        normalized = goal.strip().lower()
+
+        # "create a folder called/named X [in Y] and move Z into it"
+        if ("create a folder" in normalized or "create folder" in normalized) and "move " in normalized:
+            folder_name = "AURA"
+            for prefix in ("called ", "named ", "folder "):
+                if prefix in normalized:
+                    idx = normalized.index(prefix) + len(prefix)
+                    part = goal.strip()[idx:].split()[0].strip("\"'.,")
+                    if part:
+                        folder_name = part
+                        break
+
+            file_name = "report.docx"
+            if "move " in normalized:
+                idx = normalized.index("move ") + len("move ")
+                file_name = goal.strip()[idx:].split()[0].strip("\"'.,")
+
+            act1 = Action(
+                action_id="act_create_folder",
+                action_type=ActionType.CREATE_FOLDER,
+                target=folder_name,
+                description=f"Create folder '{folder_name}'.",
+                verification={"type": "FS_EXISTS", "path": folder_name},
+            )
+            act2 = Action(
+                action_id="act_move_file",
+                action_type=ActionType.MOVE_FILE,
+                target=file_name,
+                value=folder_name,
+                dependencies=["act_create_folder"],
+                description=f"Move '{file_name}' into '{folder_name}'.",
+                verification={"type": "FS_MOVED", "source": file_name, "destination": folder_name},
+            )
+            return [act1, act2]
+
+        # "create folder called/named X" or "create folder X"
+        if "create folder" in normalized or "create a folder" in normalized or "create directory" in normalized:
+            target_name = "New Folder"
+            for prefix in ("called ", "named ", "folder ", "directory "):
+                if prefix in normalized:
+                    part = normalized.split(prefix)[1].strip("\"'.,")
+                    if part:
+                        target_name = part.split()[0]
+                        break
+            return [
+                Action(
+                    action_type=ActionType.CREATE_FOLDER,
+                    target=target_name,
+                    description=f"Create folder '{target_name}'.",
+                    verification={"type": "FS_EXISTS", "path": target_name},
+                )
+            ]
+
+        # "create file called/named X" or "create file X"
+        if "create file" in normalized or "create a file" in normalized:
+            target_name = "file.txt"
+            for prefix in ("called ", "named ", "file "):
+                if prefix in normalized:
+                    part = normalized.split(prefix)[1].strip("\"'.,")
+                    if part:
+                        target_name = part.split()[0]
+                        break
+            return [
+                Action(
+                    action_type=ActionType.CREATE_FILE,
+                    target=target_name,
+                    value="",
+                    description=f"Create file '{target_name}'.",
+                    verification={"type": "FS_EXISTS", "path": target_name},
+                )
+            ]
+
+        # "rename X to Y"
+        if "rename " in normalized and " to " in normalized:
+            parts = normalized.split("rename ")[1].split(" to ")
+            src = parts[0].strip("\"'.,")
+            dst = parts[1].strip("\"'.,")
+            return [
+                Action(
+                    action_type=ActionType.RENAME_FILE,
+                    target=src,
+                    value=dst,
+                    description=f"Rename '{src}' to '{dst}'.",
+                    verification={"type": "FS_RENAMED", "old_path": src, "new_path": dst},
+                )
+            ]
+
+        # "move X into/to Y"
+        if "move " in normalized and (" into " in normalized or " to " in normalized):
+            sep = " into " if " into " in normalized else " to "
+            parts = normalized.split("move ")[1].split(sep)
+            src = parts[0].strip("\"'.,")
+            dst = parts[1].strip("\"'.,")
+            return [
+                Action(
+                    action_type=ActionType.MOVE_FILE,
+                    target=src,
+                    value=dst,
+                    description=f"Move '{src}' to '{dst}'.",
+                    verification={"type": "FS_MOVED", "source": src, "destination": dst},
+                )
+            ]
+
+        # "copy X to Y"
+        if "copy " in normalized and " to " in normalized:
+            parts = normalized.split("copy ")[1].split(" to ")
+            src = parts[0].strip("\"'.,")
+            dst = parts[1].strip("\"'.,")
+            return [
+                Action(
+                    action_type=ActionType.COPY_FILE,
+                    target=src,
+                    value=dst,
+                    description=f"Copy '{src}' to '{dst}'.",
+                    verification={"type": "FS_COPIED", "source": src, "destination": dst},
+                )
+            ]
+
+        # "delete file X" or "delete X"
+        if "delete " in normalized:
+            target_name = normalized.split("delete ")[1].replace("file ", "").strip("\"'.,")
+            return [
+                Action(
+                    action_type=ActionType.DELETE_FILE,
+                    target=target_name,
+                    description=f"Delete '{target_name}'.",
+                    verification={"type": "FS_DELETED", "path": target_name},
+                )
+            ]
+
+        # "search files for X" or "search for X in files"
+        if "search" in normalized:
+            query = "report"
+            if "search for " in normalized:
+                query = normalized.split("search for ")[1].split()[0].strip("\"'.,")
+            elif "search files for " in normalized:
+                query = normalized.split("search files for ")[1].split()[0].strip("\"'.,")
+            return [
+                Action(
+                    action_type=ActionType.SEARCH_FILES,
+                    target=query,
+                    value=query,
+                    description=f"Search for files matching '{query}'.",
+                )
+            ]
+
+        return []
+
+    # ----------------------------------------------------------------------
+    # Cross-Application Workflow Decomposition
+    # ----------------------------------------------------------------------
+
+    def _decompose_chrome_search(self, goal: str, mode: str) -> list[Action]:
+        query = "AURA"
+        if "search for " in goal.lower():
+            query = goal.lower().split("search for ")[1].strip("\"'.,")
+
+        search_url = f"https://www.google.com/search?q={query}"
+        return [
+            Action(
+                action_id="act_open_chrome",
+                action_type=ActionType.LAUNCH_APPLICATION,
+                target="chrome",
+                description="Launch Google Chrome.",
+                verification={"type": "APPLICATION_RUNNING", "processes": ["chrome.exe"]},
+            ),
+            Action(
+                action_id="act_search_query",
+                action_type=ActionType.OPEN_URL,
+                target=search_url,
+                dependencies=["act_open_chrome"],
+                description=f"Search Google for '{query}'.",
+                verification={"type": "BROWSER_URL", "url": search_url},
+            ),
+        ]
+
+    def _decompose_chrome_search_and_save(self, goal: str, mode: str) -> list[Action]:
+        query = "AURA"
+        if "search for " in goal.lower():
+            part = goal.lower().split("search for ")[1]
+            if " and " in part:
+                query = part.split(" and ")[0].strip("\"'.,")
+            else:
+                query = part.strip("\"'.,")
+
+        filename = "search_result.txt"
+        search_url = f"https://www.google.com/search?q={query}"
+
+        return [
+            Action(
+                action_id="act_1_browser",
+                action_type=ActionType.OPEN_URL,
+                target=search_url,
+                description=f"Search for '{query}' in Chrome.",
+                verification={"type": "BROWSER_URL", "url": search_url},
+            ),
+            Action(
+                action_id="act_2_extract",
+                action_type=ActionType.EXTRACT_PAGE_CONTENT,
+                dependencies=["act_1_browser"],
+                description="Extract search results from browser.",
+            ),
+            Action(
+                action_id="act_3_save",
+                action_type=ActionType.CREATE_FILE,
+                target=filename,
+                value=f"Search results for: {query}",
+                dependencies=["act_2_extract"],
+                description=f"Save extracted content to '{filename}'.",
+                verification={"type": "FS_EXISTS", "path": filename},
             ),
         ]
 
