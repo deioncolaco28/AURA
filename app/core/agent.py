@@ -10,31 +10,20 @@ from app.logging.logger import AURALogger
 
 class Agent:
     """
-    Main coordinator for AURA.
+    Main orchestration layer for AURA.
 
-    Pipeline:
-
-        Text
-          ↓
-        Intent
-          ↓
-        Mode Router
-          ↓
-        Planner
-          ↓
-        ┌───────────────────────────────┐
-        │                               │
-    DO_IT_FOR_ME                   SHOW_ME_HOW
-        │                               │
-        ↓                               ↓
-    ExecutionEngine                  Tutor
-        │                               │
-        ↓                               ↓
-    Execute + Verify            TutoringController
-        │                               │
-        └───────────────┬───────────────┘
-                        ↓
-                   Completion
+    Responsibilities:
+        Voice/text input
+            ↓
+        Intent parsing
+            ↓
+        Mode routing
+            ↓
+        Task planning
+            ↓
+        Tutoring OR autonomous execution
+            ↓
+        Verification / recovery
     """
 
     DEFAULT_MAX_RETRIES = 5
@@ -56,16 +45,11 @@ class Agent:
         self.intent_parser = intent_parser or IntentParser()
         self.mode_router = mode_router or ModeRouter()
         self.planner = planner or Planner()
-
         self.voice_manager = voice_manager
         self.action_executor = action_executor
         self.application_verifier = application_verifier
         self.screen_verifier = screen_verifier
-
         self.logger = logger or AURALogger()
-
-        # Tutoring dependencies are optional so that the existing
-        # execution-focused unit tests do not need a voice system.
         self.tutor = tutor
         self.tutoring_controller = tutoring_controller
 
@@ -80,15 +64,16 @@ class Agent:
 
         self.state = RuntimeState()
 
+    # ------------------------------------------------------------------
+    # MAIN ENTRY POINT
+    # ------------------------------------------------------------------
+
     def process_text(self, text: str):
         """
-        Process one user command.
+        Process a user command from text/STT.
 
-        DO_IT_FOR_ME:
-            Planner → ExecutionEngine → Execute → Verify
-
-        SHOW_ME_HOW:
-            Planner → Tutor → TutoringController
+        Incomplete commands are rejected before planning so AURA
+        does not create meaningless SPEAK actions.
         """
 
         if not text or not text.strip():
@@ -98,9 +83,43 @@ class Agent:
 
         print(f"\nUser command: {text}")
 
-        self.state.current_state = (
-            AssistantState.UNDERSTANDING
-        )
+        # --------------------------------------------------------------
+        # IMPORTANT:
+        # Reject incomplete natural-language commands BEFORE planning.
+        # This protects against IntentParser reducing:
+        #
+        #   "show me how to"
+        #
+        # into:
+        #
+        #   goal = "to"
+        # --------------------------------------------------------------
+        if self._is_incomplete_command(text):
+            self.state.current_state = AssistantState.FAILED
+
+            error = "Incomplete command."
+
+            self.logger.task_failed(
+                text.strip(),
+                error,
+            )
+
+            print(
+                "\nIncomplete command. "
+                "Please specify what you would like me to do."
+            )
+
+            self._speak(
+                "Please tell me what you would like me to do."
+            )
+
+            return None
+
+        # --------------------------------------------------------------
+        # UNDERSTANDING
+        # --------------------------------------------------------------
+
+        self.state.current_state = AssistantState.UNDERSTANDING
 
         intent = self.intent_parser.parse(text)
 
@@ -114,42 +133,36 @@ class Agent:
             risk=intent.risk_level,
         )
 
-        # Basic safety gate.
+        # --------------------------------------------------------------
+        # CONFIRMATION
+        # --------------------------------------------------------------
+
         if intent.requires_confirmation:
-            print(
-                "Confirmation required for this task."
-            )
+            print("Confirmation required for this task.")
 
             self._speak(
-                "This task requires confirmation "
-                "before I can continue."
+                "This task requires confirmation before I can continue."
             )
 
-            self.state.current_state = (
-                AssistantState.IDLE
-            )
+            self.state.current_state = AssistantState.IDLE
 
             return None
 
-        self.state.current_mode = (
-            self.mode_router.route(intent)
-        )
+        # --------------------------------------------------------------
+        # MODE + TASK
+        # --------------------------------------------------------------
 
+        self.state.current_mode = self.mode_router.route(intent)
         self.state.current_task = intent.goal
 
-        self.state.current_state = (
-            AssistantState.PLANNING
-        )
+        self.state.current_state = AssistantState.PLANNING
 
         task = self.planner.create_task(intent)
 
-        self.state.total_steps = (
-            task.total_actions
-        )
+        self.state.total_steps = task.total_actions
 
         print(
-            f"Planned actions: "
-            f"{task.total_actions}"
+            f"Planned actions: {task.total_actions}"
         )
 
         for index, action in enumerate(
@@ -157,8 +170,7 @@ class Agent:
             start=1,
         ):
             print(
-                f"  {index}. "
-                f"{action.action_type}"
+                f"  {index}. {action.action_type}"
                 + (
                     f" -> {action.target}"
                     if action.target
@@ -167,53 +179,81 @@ class Agent:
             )
 
         if not task.actions:
-            self.state.current_state = (
-                AssistantState.FAILED
-            )
+            self.state.current_state = AssistantState.FAILED
 
             self.logger.task_failed(
                 intent.goal,
                 "No actions were generated.",
             )
 
+            self._speak(
+                "I could not create a plan for that task."
+            )
+
             return None
 
-        # ---------------------------------------------------------
-        # SHOW ME HOW
-        # ---------------------------------------------------------
+        # --------------------------------------------------------------
+        # EXECUTION / TUTORING
+        # --------------------------------------------------------------
+
         if self.state.current_mode == "SHOW_ME_HOW":
             return self._run_tutoring_mode(
                 task,
                 intent.goal,
             )
 
-        # ---------------------------------------------------------
-        # DO IT FOR ME
-        # ---------------------------------------------------------
         return self._run_execution_mode(
             task,
             intent.goal,
         )
+
+    # ------------------------------------------------------------------
+    # INCOMPLETE COMMAND DETECTION
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_incomplete_command(text: str) -> bool:
+        """
+        Detect commands that do not contain an actual task.
+
+        This check intentionally operates on the RAW user input
+        rather than the parsed intent because the IntentParser may
+        normalize incomplete commands into misleading goals such as
+        "to".
+        """
+
+        normalized = " ".join(
+            text.strip().lower().split()
+        )
+
+        incomplete_commands = {
+            "show me how",
+            "show me how to",
+            "do it for me",
+            "do this for me",
+            "open",
+            "launch",
+            "start",
+            "go to",
+        }
+
+        return normalized in incomplete_commands
+
+    # ------------------------------------------------------------------
+    # AUTONOMOUS MODE
+    # ------------------------------------------------------------------
 
     def _run_execution_mode(
         self,
         task,
         goal: str,
     ):
-        """Run the autonomous Do It For Me pipeline."""
+        self.state.current_state = AssistantState.ACTING
 
-        self.state.current_state = (
-            AssistantState.ACTING
-        )
-
-        context = self.execution_engine.run(
-            task
-        )
+        context = self.execution_engine.run(task)
 
         if context.completed:
-            self.state.current_state = (
-                AssistantState.COMPLETED
-            )
+            self.state.current_state = AssistantState.COMPLETED
 
             self.logger.task_completed(goal)
 
@@ -226,13 +266,9 @@ class Agent:
             )
 
         else:
-            self.state.current_state = (
-                AssistantState.FAILED
-            )
+            self.state.current_state = AssistantState.FAILED
 
-            self.logger.task_failed(
-                goal
-            )
+            self.logger.task_failed(goal)
 
             print(
                 "\nTask could not be completed."
@@ -244,17 +280,17 @@ class Agent:
 
         return context
 
+    # ------------------------------------------------------------------
+    # TUTORING MODE
+    # ------------------------------------------------------------------
+
     def _run_tutoring_mode(
         self,
         task,
         goal: str,
     ):
-        """Run the interactive Show Me How pipeline."""
-
         if self.voice_manager is None:
-            self.state.current_state = (
-                AssistantState.FAILED
-            )
+            self.state.current_state = AssistantState.FAILED
 
             error = (
                 "Tutoring mode requires a voice manager."
@@ -270,8 +306,6 @@ class Agent:
             return None
 
         try:
-            # Lazy imports keep the core Agent compatible
-            # with existing execution-focused tests.
             if self.tutor is None:
                 from app.tutoring.tutor import Tutor
 
@@ -282,26 +316,18 @@ class Agent:
                     TutoringController,
                 )
 
-                self.tutoring_controller = (
-                    TutoringController(
-                        voice_manager=self.voice_manager
-                    )
+                self.tutoring_controller = TutoringController(
+                    voice_manager=self.voice_manager
                 )
 
-            self.state.current_state = (
-                AssistantState.ACTING
-            )
+            self.state.current_state = AssistantState.ACTING
 
-            instructions = (
-                self.tutor.create_instructions(
-                    task
-                )
+            instructions = self.tutor.create_instructions(
+                task
             )
 
             if not instructions:
-                self.state.current_state = (
-                    AssistantState.FAILED
-                )
+                self.state.current_state = AssistantState.FAILED
 
                 error = (
                     "No tutoring instructions were generated."
@@ -313,8 +339,7 @@ class Agent:
                 )
 
                 self._speak(
-                    "I could not create instructions "
-                    "for that task."
+                    "I could not create instructions for that task."
                 )
 
                 return None
@@ -332,21 +357,15 @@ class Agent:
                 instructions
             )
 
-            # TutoringController currently returns None,
-            # so determine completion from instruction state.
             completed = all(
                 instruction.completed
                 for instruction in instructions
             )
 
             if completed:
-                self.state.current_state = (
-                    AssistantState.COMPLETED
-                )
+                self.state.current_state = AssistantState.COMPLETED
 
-                self.logger.task_completed(
-                    goal
-                )
+                self.logger.task_completed(goal)
 
                 print(
                     "\nTutoring completed successfully."
@@ -357,9 +376,7 @@ class Agent:
                 )
 
             else:
-                self.state.current_state = (
-                    AssistantState.FAILED
-                )
+                self.state.current_state = AssistantState.FAILED
 
                 self.logger.task_failed(
                     goal,
@@ -371,16 +388,13 @@ class Agent:
                 )
 
                 self._speak(
-                    "I could not confirm all the "
-                    "tutoring steps."
+                    "I could not confirm all the tutoring steps."
                 )
 
             return instructions
 
         except Exception as error:
-            self.state.current_state = (
-                AssistantState.FAILED
-            )
+            self.state.current_state = AssistantState.FAILED
 
             self.logger.task_failed(
                 goal,
@@ -392,11 +406,14 @@ class Agent:
             )
 
             self._speak(
-                "I encountered an error "
-                "while running tutoring mode."
+                "I encountered an error while running tutoring mode."
             )
 
             return None
+
+    # ------------------------------------------------------------------
+    # ACTION EXECUTION
+    # ------------------------------------------------------------------
 
     def _execute_action(
         self,
@@ -404,10 +421,8 @@ class Agent:
     ) -> Action:
 
         if self.action_executor is not None:
-            result = (
-                self.action_executor.execute(
-                    action
-                )
+            result = self.action_executor.execute(
+                action
             )
 
             if isinstance(result, Action):
@@ -429,15 +444,22 @@ class Agent:
             ActionType.MOVE_MOUSE,
         ):
             executor = PerceptionExecutor()
+
         else:
             executor = ActionExecutor()
 
-        result = executor.execute(action)
+        result = executor.execute(
+            action
+        )
 
         if isinstance(result, Action):
             return result
 
         return action
+
+    # ------------------------------------------------------------------
+    # ACTION VERIFICATION
+    # ------------------------------------------------------------------
 
     def _verify_action(
         self,
@@ -456,50 +478,95 @@ class Agent:
         ):
             verification = {}
 
-        verification_type = (
-            verification.get("type")
+        verification_type = verification.get(
+            "type"
         )
 
-        if (
-            verification_type
-            == "APPLICATION_RUNNING"
-        ):
-            process = (
-                verification.get("process")
-                or getattr(
-                    action,
-                    "target",
-                    None,
-                )
+        # --------------------------------------------------------------
+        # APPLICATION RUNNING
+        # --------------------------------------------------------------
+
+        if verification_type == "APPLICATION_RUNNING":
+
+            # IMPORTANT:
+            # Preserve BOTH supported formats:
+            #
+            # {"process": "notepad.exe"}
+            #
+            # and:
+            #
+            # {"processes": ["CalculatorApp.exe", ...]}
+            #
+            # The previous implementation only extracted "process",
+            # causing Calculator to fall back to action.target == "calc".
+            processes = verification.get(
+                "processes"
+            )
+
+            process = verification.get(
+                "process"
             )
 
             if self.application_verifier is not None:
-                result = (
-                    self.application_verifier.verify(
-                        process
+
+                if processes:
+                    result = (
+                        self.application_verifier.verify(
+                            self._verification_action(
+                                processes=processes
+                            )
+                        )
                     )
-                )
+
+                elif process:
+                    result = (
+                        self.application_verifier.verify(
+                            process
+                        )
+                    )
+
+                else:
+                    result = False
+
             else:
                 from app.verification.application_verifier import (
                     ApplicationVerifier,
                 )
 
-                result = (
-                    ApplicationVerifier().verify(
+                verifier = ApplicationVerifier()
+
+                if processes:
+                    result = verifier.verify(
+                        self._verification_action(
+                            processes=processes
+                        )
+                    )
+
+                elif process:
+                    result = verifier.verify(
                         process
                     )
-                )
+
+                else:
+                    result = False
 
             if not result:
+                message = getattr(
+                    result,
+                    "message",
+                    None,
+                )
+
                 raise RuntimeError(
-                    getattr(
-                        result,
-                        "message",
-                        "Application verification failed.",
-                    )
+                    message
+                    or "Application verification failed."
                 )
 
             return
+
+        # --------------------------------------------------------------
+        # SCREEN VERIFICATION
+        # --------------------------------------------------------------
 
         if verification_type in (
             "SCREEN_CONTAINS_TEXT",
@@ -513,6 +580,7 @@ class Agent:
                         action
                     )
                 )
+
             else:
                 from app.verification.screen_verifier import (
                     ScreenVerifier,
@@ -525,17 +593,105 @@ class Agent:
                 )
 
             if not result:
+                message = getattr(
+                    result,
+                    "message",
+                    None
+                )
+
                 raise RuntimeError(
-                    getattr(
-                        result,
-                        "message",
-                        "Screen verification failed.",
-                    )
+                    message
+                    or "Screen verification failed."
                 )
 
             return
 
+        # --------------------------------------------------------------
+        # BROWSER URL VERIFICATION
+        # --------------------------------------------------------------
+
+        if verification_type == "BROWSER_URL":
+
+            expected_url = str(
+                verification.get(
+                    "url",
+                    ""
+                )
+            ).strip()
+
+            actual_url = str(
+                action.execution_result.get(
+                    "url",
+                    ""
+                )
+            ).strip()
+
+            if not expected_url:
+                raise RuntimeError(
+                    "Browser verification requires a URL."
+                )
+
+            if not actual_url:
+                raise RuntimeError(
+                    "Browser action did not return a URL."
+                )
+
+            expected_normalized = (
+                expected_url.rstrip("/")
+            )
+
+            actual_normalized = (
+                actual_url.rstrip("/")
+            )
+
+            if (
+                expected_normalized.lower()
+                != actual_normalized.lower()
+            ):
+                raise RuntimeError(
+                    "Browser verification failed: "
+                    f"expected '{expected_url}', "
+                    f"got '{actual_url}'."
+                )
+
+            return
+
+        # Unknown/no verification:
+        # intentionally do nothing.
         return
+
+    # ------------------------------------------------------------------
+    # VERIFICATION HELPER
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _verification_action(
+        processes,
+    ):
+        """
+        Create a minimal verification-compatible object.
+
+        This allows ApplicationVerifier to receive the same
+        {"processes": [...]} structure used by the task system
+        without coupling Agent to a specific verifier implementation.
+        """
+
+        class VerificationAction:
+            def __init__(
+                self,
+                process_list,
+            ):
+                self.verification = {
+                    "processes": process_list
+                }
+
+        return VerificationAction(
+            processes
+        )
+
+    # ------------------------------------------------------------------
+    # VOICE
+    # ------------------------------------------------------------------
 
     def _speak(
         self,

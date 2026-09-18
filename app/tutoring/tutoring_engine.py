@@ -8,26 +8,33 @@ from app.voice.voice_manager import VoiceManager
 
 class TutoringEngine:
     """
-    Provides the lower-level tutoring guidance services.
+    Provides lower-level tutoring perception services.
 
-    The TutoringController owns the tutoring workflow.
+    The TutoringController owns the tutoring workflow and speech.
+
     This engine is responsible for:
-        - speaking instructions
         - capturing the screen
         - detecting visible targets
-        - highlighting grounded targets
+        - grounding targets
+        - highlighting targets
 
-    It never performs the user's requested action.
+    It never:
+        - speaks
+        - clicks
+        - types
+        - presses keys
+        - performs the user's requested action
     """
 
     def __init__(
         self,
-        voice_manager: VoiceManager,
+        voice_manager: VoiceManager | None = None,
         screenshot_capture: ScreenshotCapture | None = None,
         ocr: OCR | None = None,
         grounder: UIGrounder | None = None,
         overlay: HighlightOverlay | None = None,
     ):
+        # Kept for backwards compatibility with existing callers/tests.
         self.voice_manager = voice_manager
 
         self.screenshot_capture = (
@@ -53,20 +60,24 @@ class TutoringEngine:
     def guide(
         self,
         instruction: TutoringInstruction,
-    ) -> None:
+    ) -> bool:
         """
-        Speak one tutoring instruction and,
-        when applicable, highlight its target.
-        """
+        Compatibility method for older callers.
 
-        self.voice_manager.speak(
-            instruction.message
-        )
+        Speech is intentionally NOT performed here.
+
+        The controller is the single owner of tutoring speech.
+
+        Returns True when the target can be highlighted,
+        or True for instructions without a target.
+        """
 
         if instruction.target:
-            self.highlight_target(
+            return self.highlight_target(
                 instruction.target
             )
+
+        return True
 
     def highlight_target(
         self,
@@ -79,7 +90,7 @@ class TutoringEngine:
         target was found.
 
         This method only points to the target.
-        It never clicks or otherwise interacts with it.
+        It never interacts with it.
         """
 
         if not target or not target.strip():

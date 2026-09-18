@@ -1,69 +1,112 @@
 import time
 
-from app.perception.grounding import UIGrounder
-from app.perception.ocr import OCR, TesseractOCR
-from app.perception.screenshot import ScreenshotCapture
-from app.tutoring.instruction import TutoringInstruction
+from app.config.constants import AssistantMode
+from app.intelligence.action import ActionType
 from app.tutoring.overlay import HighlightOverlay
-from app.verification.application_verifier import ApplicationVerifier
-from app.voice.voice_manager import VoiceManager
+from app.tutoring.tutoring_engine import TutoringEngine
 
 
 class TutoringController:
     """
-    Controls the interactive SHOW_ME_HOW experience.
+    Controls the complete SHOW_ME_HOW tutoring workflow.
+
+    The user performs the actual actions.
 
     AURA:
         - speaks instructions
         - observes the screen
-        - detects UI targets
         - highlights targets
-        - waits for the user to perform the action
-        - verifies completion
-        - provides recovery guidance
+        - waits for completion
+        - verifies each step
+        - marks instructions as completed
 
-    AURA does NOT perform the user's requested action in tutoring mode.
+    The controller never performs the requested user action.
     """
 
     def __init__(
         self,
-        voice_manager: VoiceManager,
-        screenshot_capture: ScreenshotCapture | None = None,
-        ocr: OCR | None = None,
-        grounder: UIGrounder | None = None,
-        overlay: HighlightOverlay | None = None,
-        poll_interval: float = 0.5,
-        timeout: float = 30.0,
-        application_verifier: ApplicationVerifier | None = None,
-        grounding_threshold: float = 0.65,
+        overlay=None,
+        grounder=None,
+        observer=None,
+        tts=None,
+        voice_manager=None,
+        tutoring_engine=None,
     ):
-        self.voice_manager = voice_manager
-        self.screenshot_capture = (
-            screenshot_capture or ScreenshotCapture()
-        )
-        self.ocr = ocr or TesseractOCR()
-        self.grounder = grounder or UIGrounder()
         self.overlay = overlay or HighlightOverlay()
+        self.grounder = grounder
+        self.observer = observer
+        self.tts = tts
+        self.voice_manager = voice_manager
 
-        self.poll_interval = poll_interval
-        self.timeout = timeout
-        self.application_verifier = (
-            application_verifier or ApplicationVerifier()
-        )
-        self.grounding_threshold = grounding_threshold
-
-        self._baseline_screen = None
-
-    def run(
-        self,
-        instructions: list[TutoringInstruction],
-    ) -> bool:
-        if not instructions:
-            self.voice_manager.speak(
-                "There are no instructions available."
+        if tutoring_engine is not None:
+            self.tutoring_engine = tutoring_engine
+        else:
+            self.tutoring_engine = TutoringEngine(
+                voice_manager=self.voice_manager,
+                grounder=grounder,
+                overlay=self.overlay,
             )
+
+        if self.grounder is None:
+            self.grounder = getattr(
+                self.tutoring_engine,
+                "grounder",
+                None,
+            )
+
+    # ------------------------------------------------------------------
+    # PUBLIC API
+    # ------------------------------------------------------------------
+
+    def run(self, task_or_instructions):
+        """
+        Accept either:
+
+            - a Task object
+            - a list of TutoringInstruction objects
+        """
+
+        if isinstance(task_or_instructions, list):
+            return self._run_instructions(
+                task_or_instructions
+            )
+
+        return self.execute(task_or_instructions)
+
+    def execute(self, task):
+        """
+        Execute a complete SHOW_ME_HOW Task.
+        """
+
+        if task.mode != AssistantMode.SHOW_ME_HOW:
             return False
 
+        actions = getattr(task, "actions", [])
+
+        if not actions:
+            return False
+
+        print(
+            f"Generated tutoring instructions: "
+            f"{len(actions)}"
+        )
+
+        return self._run_actions(actions)
+
+    # ------------------------------------------------------------------
+    # INSTRUCTION WORKFLOW
+    # ------------------------------------------------------------------
+
+    def _run_instructions(self, instructions):
+        if not instructions:
+            return False
+
+        print(
+            f"Generated tutoring instructions: "
+            f"{len(instructions)}"
+        )
+
+        completed = True
         total_steps = len(instructions)
 
         for index, instruction in enumerate(
@@ -71,450 +114,586 @@ class TutoringController:
             start=1,
         ):
             print(
-                f"\nTutoring step {index}/{total_steps}"
+                f"\nTutoring step "
+                f"{index}/{total_steps}"
             )
 
-            completed = self._execute_instruction(
+            success = self._run_single_instruction(
                 instruction
             )
 
-            if not completed:
+            instruction.completed = success
+
+            if success:
                 print(
-                    f"Tutoring step {index} failed."
+                    f"Step {index} completed."
+                )
+            else:
+                print(
+                    f"Step {index} failed."
                 )
 
-                self.voice_manager.speak(
-                    "I could not confirm that "
-                    "you completed this step."
+                completed = False
+                break
+
+        return completed
+
+    def _run_actions(self, actions):
+        """
+        Compatibility path for callers that provide
+        Action objects instead of TutoringInstruction objects.
+        """
+
+        completed = True
+
+        for index, action in enumerate(
+            actions,
+            start=1,
+        ):
+            print(
+                f"\nTutoring step "
+                f"{index}/{len(actions)}"
+            )
+
+            self._execute_action(action)
+
+        return completed
+
+    def _run_single_instruction(self, instruction):
+        """
+        Run one tutoring instruction.
+
+        The controller owns speech.
+
+        TutoringEngine is used only for:
+            screenshot
+            OCR
+            grounding
+            highlighting
+        """
+
+        action_type = getattr(
+            instruction,
+            "action_type",
+            None,
+        )
+
+        parameters = getattr(
+            instruction,
+            "parameters",
+            {},
+        ) or {}
+
+        completion = getattr(
+            instruction,
+            "completion",
+            {},
+        ) or {}
+
+        target = getattr(
+            instruction,
+            "target",
+            None,
+        )
+
+        message = getattr(
+            instruction,
+            "message",
+            "",
+        )
+
+        # --------------------------------------------------------------
+        # Capture baseline before a manual screen-changing action.
+        # --------------------------------------------------------------
+
+        baseline = None
+
+        if (
+            action_type == ActionType.PRESS_KEY
+            and completion.get("screen_changed")
+        ):
+            baseline = self._screen_signature()
+
+        # --------------------------------------------------------------
+        # Speak instruction exactly once.
+        # --------------------------------------------------------------
+
+        self._speak(message)
+
+        # --------------------------------------------------------------
+        # Highlight target when applicable.
+        # --------------------------------------------------------------
+
+        if target:
+            highlighted = (
+                self.tutoring_engine.highlight_target(
+                    target
+                )
+            )
+
+            if not highlighted:
+                print(
+                    f"Could not highlight target: "
+                    f"{target}"
                 )
 
-                self.overlay.close()
-                return False
+        # --------------------------------------------------------------
+        # SPEAK requires no user action.
+        # --------------------------------------------------------------
 
-            instruction.completed = True
+        if action_type == ActionType.SPEAK:
+            return True
+
+        # --------------------------------------------------------------
+        # PRESS KEY
+        # --------------------------------------------------------------
+
+        if action_type == ActionType.PRESS_KEY:
+            return self._wait_for_press_key_completion(
+                completion,
+                baseline,
+            )
+
+        # --------------------------------------------------------------
+        # TYPE TEXT
+        # --------------------------------------------------------------
+
+        if action_type == ActionType.TYPE_TEXT:
+            text = parameters.get(
+                "text",
+                "",
+            )
+
+            return self._wait_for_text(
+                text
+            )
+
+        # --------------------------------------------------------------
+        # CLICK
+        # --------------------------------------------------------------
+
+        if action_type == ActionType.CLICK:
+            return self._wait_for_click_completion(
+                completion,
+                target,
+            )
+
+        # --------------------------------------------------------------
+        # WAIT
+        # --------------------------------------------------------------
+
+        if action_type == ActionType.WAIT:
+            seconds = float(
+                parameters.get(
+                    "seconds",
+                    1.0,
+                )
+            )
+
+            time.sleep(seconds)
+            return True
+
+        # --------------------------------------------------------------
+        # Unknown instruction.
+        # --------------------------------------------------------------
+
+        print(
+            f"Unsupported tutoring instruction: "
+            f"{action_type}"
+        )
+
+        return False
+
+    # ------------------------------------------------------------------
+    # ACTION COMPATIBILITY
+    # ------------------------------------------------------------------
+
+    def _execute_action(self, action):
+        """
+        Compatibility handler for raw Action objects.
+        """
+
+        action_type = action.action_type
+
+        if action_type == ActionType.SPEAK:
+            self._speak(action.value)
+            return
+
+        if action_type == ActionType.PRESS_KEY:
+            self._speak(
+                action.description
+                or f"Please press the {action.value} key."
+            )
+            return
+
+        if action_type == ActionType.TYPE_TEXT:
+            text = str(action.value or "")
+
+            self._speak(
+                action.description
+                or f"Please type {text}."
+            )
+
+            self._wait_for_text(text)
+            return
+
+        if action_type == ActionType.CLICK:
+            target = action.target
+
+            if target:
+                self.tutoring_engine.highlight_target(
+                    target
+                )
+
+            self._speak(
+                action.description
+                or "Please click the highlighted target."
+            )
+
+            return
+
+        if action_type == ActionType.WAIT:
+            seconds = float(
+                action.parameters.get(
+                    "seconds",
+                    1.0,
+                )
+            )
+
+            time.sleep(seconds)
+            return
+
+    # ------------------------------------------------------------------
+    # COMPLETION CHECKS
+    # ------------------------------------------------------------------
+
+    def _wait_for_press_key_completion(
+        self,
+        completion,
+        baseline,
+        timeout=8.0,
+    ):
+        if not completion.get("screen_changed"):
+            return True
+
+        if baseline is None:
+            baseline = self._screen_signature()
+
+        start = time.time()
+
+        while time.time() - start < timeout:
+            current = self._screen_signature()
+
+            if (
+                current is not None
+                and baseline is not None
+                and current != baseline
+            ):
+                print(
+                    "Screen change detected."
+                )
+                return True
+
+            time.sleep(0.5)
+
+        print(
+            "Timed out waiting for screen change."
+        )
+
+        return False
+
+    def _wait_for_text(
+        self,
+        text,
+        timeout=8.0,
+    ):
+        if not text:
+            return True
+
+        start = time.time()
+
+        while time.time() - start < timeout:
+            elements = self._get_screen_elements()
+
+            if elements and self.grounder is not None:
+                result = self.grounder.ground(
+                    elements,
+                    text,
+                )
+
+                if result.found:
+                    print(
+                        f"Screen text detected: "
+                        f"{text} "
+                        f"(score={result.score:.2f})"
+                    )
+                    return True
+
+            time.sleep(0.5)
+
+        print(
+            f"Timed out waiting for screen text: "
+            f"{text}"
+        )
+
+        return False
+
+    def _wait_for_click_completion(
+        self,
+        completion,
+        target,
+        timeout=8.0,
+    ):
+        verification_type = completion.get(
+            "type"
+        )
+
+        # --------------------------------------------------------------
+        # Application running
+        # --------------------------------------------------------------
+
+        if verification_type == "APPLICATION_RUNNING":
+            process = completion.get(
+                "process"
+            )
+
+            processes = completion.get(
+                "processes"
+            )
+
+            if process:
+                expected_processes = [
+                    process
+                ]
+            elif processes:
+                expected_processes = list(
+                    processes
+                )
+            else:
+                expected_processes = []
+
+            if not expected_processes:
+                return True
+
+            start = time.time()
+
+            while time.time() - start < timeout:
+                if self._process_running(
+                    expected_processes
+                ):
+                    print(
+                        "Application detected: "
+                        f"{expected_processes}"
+                    )
+                    return True
+
+                time.sleep(0.5)
 
             print(
-                f"Step {index} completed."
+                "Timed out waiting for application: "
+                f"{expected_processes}"
             )
 
-            self.overlay.close()
+            return False
 
-            success_message = getattr(
-                instruction,
-                "success_message",
-                None,
+        # --------------------------------------------------------------
+        # Screen text verification
+        # --------------------------------------------------------------
+
+        if verification_type == "SCREEN_CONTAINS_TEXT":
+            expected = completion.get(
+                "text"
             )
 
-            if success_message:
-                self.voice_manager.speak(
-                    success_message
-                )
+            return self._wait_for_text(
+                expected
+            )
+
+        # --------------------------------------------------------------
+        # No explicit verification.
+        # --------------------------------------------------------------
+
+        if target:
+            time.sleep(0.5)
 
         return True
 
-    def _execute_instruction(
-        self,
-        instruction: TutoringInstruction,
-    ) -> bool:
-        instruction.attempts = 0
+    # ------------------------------------------------------------------
+    # SCREEN OBSERVATION
+    # ------------------------------------------------------------------
 
-        # Capture the current complete screen before
-        # instructions that depend on a screen change.
-        if self._requires_screen_baseline(instruction):
-            self._baseline_screen = (
-                self._capture_full_screen()
-            )
+    def _get_screen_elements(self):
+        """
+        Get OCR elements.
 
-        # Speak BEFORE asking the user to act.
-        self.voice_manager.speak(
-            instruction.message
-        )
+        Prefer the explicitly supplied observer.
 
-        # Highlight only after the instruction has been
-        # spoken, so the user can immediately see what
-        # AURA is referring to.
-        if instruction.target:
-            self._highlight_target(
-                instruction.target
-            )
+        Otherwise use the TutoringEngine's
+        screenshot + OCR pipeline.
+        """
 
-        # SPEAK-only instructions are immediately complete.
-        if instruction.action_type == "SPEAK":
-            return True
+        if self.observer is not None:
+            try:
+                result = self.observer.observe()
 
-        completed = self._wait_for_completion(
-            instruction
-        )
+                if result is None:
+                    return []
 
-        if completed:
-            return True
+                if isinstance(result, list):
+                    return result
 
-        return self._recover_instruction(
-            instruction
-        )
-
-    def _wait_for_completion(
-        self,
-        instruction: TutoringInstruction,
-    ) -> bool:
-        start_time = time.time()
-
-        while (
-            time.time() - start_time
-            < self.timeout
-        ):
-            self.overlay.update()
-
-            if self._is_instruction_completed(
-                instruction
-            ):
-                return True
-
-            time.sleep(
-                self.poll_interval
-            )
-
-        return False
-
-    def _is_instruction_completed(
-        self,
-        instruction: TutoringInstruction,
-    ) -> bool:
-        completion = instruction.completion
-
-        if not completion:
-            return False
-
-        if "screen_contains" in completion:
-            target = str(
-                completion["screen_contains"]
-            )
-
-            return self._screen_contains_text(
-                target
-            )
-
-        if "screen_not_contains" in completion:
-            target = str(
-                completion["screen_not_contains"]
-            )
-
-            return not self._screen_contains_text(
-                target
-            )
-
-        if "screen_changed" in completion:
-            current_screen = (
-                self._capture_full_screen()
-            )
-
-            if self._baseline_screen is None:
-                self._baseline_screen = (
-                    current_screen
+                elements = getattr(
+                    result,
+                    "elements",
+                    None,
                 )
-                return False
 
-            return self._compare_screens(
-                self._baseline_screen,
-                current_screen,
-            )
+                if elements is not None:
+                    return elements
 
-        if completion.get("type") == "APPLICATION_RUNNING":
-            process = str(
-                completion.get("process", "")
-            )
-
-            if not process:
-                return False
-
-            result = self.application_verifier.verify(
-                process
-            )
-
-            return bool(result)
-
-        if "application_running" in completion:
-            process = str(
-                completion["application_running"]
-            )
-
-            result = self.application_verifier.verify(
-                process
-            )
-
-            return bool(result)
-
-        if "target_disappears" in completion:
-            target = str(
-                completion["target_disappears"]
-            )
-
-            return not self._screen_contains_text(
-                target
-            )
-
-        return False
-
-    def _capture_full_screen(self):
-        """
-        Capture the complete desktop.
-
-        This is intentionally used instead of
-        capture_foreground_window() because Windows
-        Start/Search is a shell surface and may not behave
-        like a normal foreground application window.
-        """
-        return self.screenshot_capture.capture()
-
-    def _screen_contains_text(
-        self,
-        target: str,
-    ) -> bool:
-        if not target or not target.strip():
-            return False
+            except Exception as exc:
+                print(
+                    f"Screen observation failed: "
+                    f"{exc}"
+                )
 
         try:
-            image = self._capture_full_screen()
+            screenshot_capture = getattr(
+                self.tutoring_engine,
+                "screenshot_capture",
+                None,
+            )
 
-            elements = self.ocr.detect_text(
+            ocr = getattr(
+                self.tutoring_engine,
+                "ocr",
+                None,
+            )
+
+            if (
+                screenshot_capture is None
+                or ocr is None
+            ):
+                return []
+
+            image = screenshot_capture.capture()
+
+            return ocr.detect_text(
                 image
             )
 
-            if not elements:
-                return False
-
-            result = self.grounder.ground(
-                elements=elements,
-                target=target,
+        except Exception as exc:
+            print(
+                f"Tutoring OCR failed: "
+                f"{exc}"
             )
 
-            if not result.found:
-                return False
+            return []
 
-            if (
-                result.score
-                < self.grounding_threshold
-            ):
-                print(
-                    f"Screen text match too weak: "
-                    f"{target} "
-                    f"(score={result.score:.2f})"
+    def _screen_signature(self):
+        """
+        Create a lightweight signature of the
+        currently visible OCR text.
+        """
+
+        elements = self._get_screen_elements()
+
+        if not elements:
+            return None
+
+        values = []
+
+        for element in elements:
+            text = str(
+                getattr(
+                    element,
+                    "text",
+                    "",
                 )
-                return False
+            ).strip().lower()
 
-            print(
-                f"Screen text detected: "
-                f"{target} "
-                f"(score={result.score:.2f})"
-            )
+            if text:
+                values.append(text)
 
-            return True
+        if not values:
+            return None
 
-        except Exception as error:
-            print(
-                f"Screen text verification error: "
-                f"{error}"
-            )
-            return False
+        return tuple(sorted(values))
 
-    def _compare_screens(
-        self,
-        baseline,
-        current,
-    ) -> bool:
+    # ------------------------------------------------------------------
+    # PROCESS VERIFICATION
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _process_running(processes):
         try:
-            from PIL import ImageChops
+            import subprocess
 
-            difference = ImageChops.difference(
-                baseline,
-                current,
+            result = subprocess.run(
+                [
+                    "tasklist",
+                    "/FO",
+                    "CSV",
+                    "/NH",
+                ],
+                capture_output=True,
+                text=True,
+                creationflags=(
+                    getattr(
+                        subprocess,
+                        "CREATE_NO_WINDOW",
+                        0,
+                    )
+                ),
+                check=False,
             )
 
-            return (
-                difference.getbbox()
-                is not None
-            )
+            output = result.stdout.lower()
 
-        except Exception as error:
-            print(
-                f"Screen comparison error: "
-                f"{error}"
-            )
+            for process in processes:
+                expected = str(
+                    process
+                ).strip().lower()
+
+                if expected and expected in output:
+                    return True
+
             return False
 
-    def _recover_instruction(
-        self,
-        instruction: TutoringInstruction,
-    ) -> bool:
-        recovery = instruction.recovery
+        except Exception as exc:
+            print(
+                f"Process verification failed: "
+                f"{exc}"
+            )
 
-        if not recovery:
             return False
 
-        max_attempts = int(
-            recovery.get(
-                "max_attempts",
-                0,
-            )
-        )
+    # ------------------------------------------------------------------
+    # VOICE
+    # ------------------------------------------------------------------
 
-        if max_attempts <= 0:
-            return False
-
-        while (
-            instruction.attempts
-            < max_attempts
-        ):
-            instruction.attempts += 1
-
-            message = recovery.get(
-                "message"
-            )
-
-            if message:
-                self.voice_manager.speak(
-                    str(message)
-                )
-
-            print(
-                "Recovery attempt "
-                f"{instruction.attempts}/"
-                f"{max_attempts}"
-            )
-
-            self.overlay.close()
-
-            if instruction.target:
-                self._highlight_target(
-                    instruction.target
-                )
-
-            if self._wait_for_completion(
-                instruction
-            ):
-                return True
-
-        return False
-
-    def _requires_screen_baseline(
-        self,
-        instruction: TutoringInstruction,
-    ) -> bool:
-        return (
-            "screen_changed"
-            in instruction.completion
-        )
-
-    def _highlight_target(
-        self,
-        target: str,
-    ) -> None:
-        """
-        Locate a tutoring target on the complete
-        desktop and highlight it.
-
-        Coordinates returned by OCR are already
-        screen coordinates because the screenshot
-        represents the entire screen.
-        """
-        if self.ocr is None:
-            print(
-                "OCR is unavailable; "
-                "cannot highlight target."
-            )
+    def _speak(self, text):
+        if not text:
             return
 
-        if not target or not target.strip():
-            return
+        print(
+            f"AURA: {text}"
+        )
 
-        try:
-            image = self._capture_full_screen()
-
-            elements = self.ocr.detect_text(
-                image
-            )
-
-            print(
-                f"Full-screen OCR detected "
-                f"{len(elements)} element(s)."
-            )
-
-            if not elements:
-                print(
-                    "No OCR elements detected."
-                )
+        if self.tts is not None:
+            try:
+                self.tts.speak(text)
                 return
-
-            result = self.grounder.ground(
-                elements=elements,
-                target=target,
-            )
-
-            if not result.found:
+            except Exception as exc:
                 print(
-                    "Could not find tutoring "
-                    f"target: {target}"
+                    f"TTS failed: {exc}"
                 )
-                return
 
-            if (
-                result.score
-                < self.grounding_threshold
-            ):
+        if self.voice_manager is not None:
+            try:
+                self.voice_manager.speak(text)
+            except Exception as exc:
                 print(
-                    f"Target match too weak: "
-                    f"{target} "
-                    f"(score={result.score:.2f})"
+                    f"Voice manager failed: "
+                    f"{exc}"
                 )
-                return
-
-            element = result.element
-
-            if element is None:
-                print(
-                    "Grounding returned no element."
-                )
-                return
-
-            screen_x = int(element.x)
-            screen_y = int(element.y)
-
-            width = max(
-                int(element.width),
-                20,
-            )
-
-            height = max(
-                int(element.height),
-                20,
-            )
-
-            print(
-                f"Grounded tutoring target: "
-                f"{element.text} "
-                f"score={result.score:.2f} "
-                f"reason={result.reason}"
-            )
-
-            print(
-                "Screen coordinates: "
-                f"({screen_x}, {screen_y})"
-            )
-
-            print(
-                "Highlight size: "
-                f"{width}x{height}"
-            )
-
-            self.overlay.show(
-                x=screen_x,
-                y=screen_y,
-                width=width,
-                height=height,
-            )
-
-        except Exception as error:
-            print(
-                "Tutoring target detection "
-                f"error: {error}"
-            )
