@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.perception.ui_element import UIElement
+from app.perception.ui_element import UIElement, to_ui_elements
 
 if TYPE_CHECKING:
     from app.perception.target_query import TargetQuery
@@ -41,6 +41,7 @@ class UIGrounder:
                 reason="Empty target.",
             )
 
+        elements = to_ui_elements(elements)
         target = target.strip()
 
         candidates = [
@@ -132,6 +133,7 @@ class UIGrounder:
             RELATION_BESIDE,
         )
 
+        elements = to_ui_elements(elements)
         reasoner = SpatialReasoner()
 
         # ----------------------------------------------------------
@@ -188,18 +190,11 @@ class UIGrounder:
             )
 
             relation = query.relation.lower()
-
-            if relation in (RELATION_NEAREST, RELATION_BESIDE, "next to"):
-                spatial = reasoner.resolve_nearest(
-                    candidates,
-                    reference_element,
-                )
-            else:
-                spatial = reasoner.resolve_directional(
-                    candidates,
-                    relation,
-                    reference_element,
-                )
+            spatial = reasoner.resolve_relational(
+                candidates,
+                relation,
+                reference_element,
+            )
 
             return GroundingResult(
                 found=spatial.found,

@@ -56,6 +56,15 @@ class ScreenObservation:
     #: Foreground window title at observation time.
     window_title: str | None = None
 
+    #: Foreground application/process name at observation time.
+    foreground_app: str | None = None
+
+    #: Screen dimensions (width, height) in pixels.
+    screen_dimensions: tuple[int, int] | None = None
+
+    #: Screen signature (hash or summary of visual/text state).
+    screen_signature: str | None = None
+
     @property
     def has_text(self) -> bool:
         """Return True when screen text is available."""

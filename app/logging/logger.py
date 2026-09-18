@@ -126,3 +126,117 @@ class AURALogger:
             goal=goal,
             error=error,
         )
+
+    def tutoring_step_started(
+        self,
+        step_index: int,
+        total_steps: int,
+        action_type: str | None = None,
+    ) -> None:
+        self.log(
+            "TUTORING_STEP_STARTED",
+            f"Tutoring step {step_index}/{total_steps} started.",
+            step_index=step_index,
+            total_steps=total_steps,
+            action_type=action_type,
+        )
+
+    def tutoring_instruction_given(
+        self,
+        instruction: str,
+    ) -> None:
+        self.log(
+            "TUTORING_INSTRUCTION_GIVEN",
+            "Tutoring instruction spoken.",
+            instruction=instruction,
+        )
+
+    def tutoring_waiting_for_user(
+        self,
+        step_index: int,
+    ) -> None:
+        self.log(
+            "TUTORING_WAITING_FOR_USER",
+            f"Waiting for user on step {step_index}.",
+            step_index=step_index,
+        )
+
+    def tutoring_observation(
+        self,
+        elements_count: int,
+        processes_count: int = 0,
+    ) -> None:
+        self.log(
+            "TUTORING_OBSERVATION",
+            "Screen observed for tutoring verification.",
+            elements_count=elements_count,
+            processes_count=processes_count,
+        )
+
+    def tutoring_target_resolved(
+        self,
+        target: str,
+        description: str = "",
+    ) -> None:
+        self.log(
+            "TUTORING_TARGET_RESOLVED",
+            "Tutoring target resolved.",
+            target=target,
+            description=description,
+        )
+
+    def tutoring_verification_passed(
+        self,
+        step_index: int,
+        strategy: str = "",
+    ) -> None:
+        self.log(
+            "TUTORING_VERIFICATION_PASSED",
+            f"Tutoring step {step_index} verification passed.",
+            step_index=step_index,
+            strategy=strategy,
+        )
+
+    def tutoring_verification_failed(
+        self,
+        step_index: int,
+        reason: str = "",
+    ) -> None:
+        self.log(
+            "TUTORING_VERIFICATION_FAILED",
+            f"Tutoring step {step_index} verification check failed.",
+            step_index=step_index,
+            reason=reason,
+        )
+
+    def tutoring_recovery(
+        self,
+        step_index: int,
+        attempt: int,
+    ) -> None:
+        self.log(
+            "TUTORING_RECOVERY",
+            f"Tutoring recovery initiated for step {step_index} (attempt {attempt}).",
+            step_index=step_index,
+            attempt=attempt,
+        )
+
+    def tutoring_step_completed(
+        self,
+        step_index: int,
+    ) -> None:
+        self.log(
+            "TUTORING_STEP_COMPLETED",
+            f"Tutoring step {step_index} completed.",
+            step_index=step_index,
+        )
+
+    def tutoring_task_completed(
+        self,
+        success: bool,
+    ) -> None:
+        self.log(
+            "TUTORING_TASK_COMPLETED",
+            "Tutoring task finished.",
+            success=success,
+        )

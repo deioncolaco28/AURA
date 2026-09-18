@@ -352,6 +352,73 @@ class SpatialReasoner:
             metadata={"distance_px": dist},
         )
 
+    def resolve_beside(
+        self,
+        elements: list[UIElement],
+        reference_element: UIElement,
+    ) -> SpatialResult:
+        """
+        Find the element beside / next to the reference element (same horizontal row or nearby horizontally).
+        """
+        if not elements:
+            return SpatialResult(
+                found=False,
+                reason="No candidate elements provided.",
+                candidates_considered=0,
+            )
+
+        rx, ry = reference_element.center
+
+        scored = []
+        for elem in elements:
+            cx, cy = elem.center
+            dy = abs(cy - ry)
+            dx = abs(cx - rx)
+            if dy <= self.ROW_TOLERANCE * 2 and dx > 0:
+                dist = _distance(elem, reference_element)
+                if dist <= self.PROXIMITY_THRESHOLD:
+                    score = max(0.0, 1.0 - dist / self.PROXIMITY_THRESHOLD)
+                    scored.append((score, elem, dist))
+
+        if not scored:
+            return self.resolve_nearest(elements, reference_element)
+
+        scored.sort(key=lambda t: t[0], reverse=True)
+        best_score, best_elem, dist = scored[0]
+
+        return SpatialResult(
+            found=True,
+            element=best_elem,
+            score=best_score,
+            reason=f"Element is beside '{reference_element.text or reference_element.element_id}' ({dist:.0f}px away).",
+            candidates_considered=len(elements),
+            metadata={"distance_px": dist},
+        )
+
+    def resolve_relational(
+        self,
+        elements: list[UIElement],
+        relation: str,
+        reference_element: UIElement,
+    ) -> SpatialResult:
+        """
+        Resolve any spatial relation: directional ("above", "below", "left", "right"),
+        proximity ("nearest", "closest"), or adjacency ("beside", "next to").
+        """
+        rel = relation.strip().lower()
+        if rel in ("above", "below", "left", "right"):
+            return self.resolve_directional(elements, rel, reference_element)
+        if rel in ("beside", "next to"):
+            return self.resolve_beside(elements, reference_element)
+        if rel in ("nearest", "closest", "near"):
+            return self.resolve_nearest(elements, reference_element)
+
+        return SpatialResult(
+            found=False,
+            reason=f"Unknown spatial relation: '{relation}'.",
+            candidates_considered=len(elements),
+        )
+
     def ordered_candidates(
         self,
         elements: list[UIElement],

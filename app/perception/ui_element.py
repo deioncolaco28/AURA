@@ -45,9 +45,21 @@ class UIElement:
     #: Column index within a detected grid/table (0-based, None if unknown).
     column: int | None = None
 
+    #: Screen region (e.g. "top", "bottom", "left", "right", "center").
+    screen_region: str | None = None
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    @property
+    def group_id(self) -> str | None:
+        """Alias for group."""
+        return self.group
+
+    @group_id.setter
+    def group_id(self, value: str | None) -> None:
+        self.group = value
 
     @property
     def center(self) -> tuple[int, int]:
@@ -76,3 +88,80 @@ class UIElement:
             self.description
             and self.description.strip()
         )
+
+
+def as_ui_element(element: Any, index: int = 0) -> UIElement:
+    """
+    Safely convert any perception element (UIElement, TextElement, VLMElement, dict)
+    into a canonical UIElement.
+    """
+    if isinstance(element, UIElement):
+        if not element.element_id:
+            element.element_id = f"elem-{index}"
+        return element
+
+    # Check if element is a dictionary
+    if isinstance(element, dict):
+        conf = float(element.get("confidence", 1.0))
+        if conf > 1.0:
+            conf = conf / 100.0
+        return UIElement(
+            element_id=str(element.get("element_id") or f"elem-{index}"),
+            element_type=str(element.get("element_type", "unknown")),
+            text=element.get("text"),
+            description=element.get("description"),
+            x=int(element.get("x", 0)),
+            y=int(element.get("y", 0)),
+            width=int(element.get("width", 0)),
+            height=int(element.get("height", 0)),
+            confidence=max(0.0, min(1.0, conf)),
+            source=str(element.get("source", "dict")),
+            attributes=dict(element.get("attributes", {})),
+        )
+
+    # TextElement / VLMElement or similar duck-typed object
+    text = getattr(element, "text", None)
+    description = getattr(element, "description", None)
+    x = int(getattr(element, "x", 0))
+    y = int(getattr(element, "y", 0))
+    width = int(getattr(element, "width", 0))
+    height = int(getattr(element, "height", 0))
+    raw_conf = getattr(element, "confidence", 1.0)
+    try:
+        conf = float(raw_conf)
+        if conf > 1.0:
+            conf = conf / 100.0
+        conf = max(0.0, min(1.0, conf))
+    except (ValueError, TypeError):
+        conf = 0.5
+
+    element_type = getattr(element, "element_type", "text" if text else "unknown")
+    source = getattr(element, "source", "OCR" if hasattr(element, "confidence") and not description else "unknown")
+    element_id = getattr(element, "element_id", None) or f"{source.lower()}-{index}"
+
+    return UIElement(
+        element_id=element_id,
+        element_type=element_type,
+        text=text,
+        description=description,
+        x=x,
+        y=y,
+        width=width,
+        height=height,
+        confidence=conf,
+        source=source,
+        attributes=getattr(element, "attributes", {}),
+    )
+
+
+def to_ui_elements(elements: Any) -> list[UIElement]:
+    """
+    Convert an iterable of elements into a list of canonical UIElements.
+    """
+    if not elements:
+        return []
+
+    return [
+        as_ui_element(elem, index=i)
+        for i, elem in enumerate(elements)
+    ]

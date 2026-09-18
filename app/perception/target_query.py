@@ -249,3 +249,102 @@ def parse_ordinal(text: str) -> int | None:
         return int(text)
     except ValueError:
         return None
+
+
+def parse_target_query(phrase: str) -> TargetQuery:
+    """
+    Parse a natural language target phrase or instruction into a structured TargetQuery.
+
+    Supports:
+        - Ordinals: "second search result", "last option", "third item", "first result", "second-last option"
+        - Directional: "option below Calculator", "item above Notepad", "button to the right of Search"
+        - Proximity: "nearest result", "item next to Calculator", "option beside Calculator"
+        - Plain text: "Notepad", "Calculator"
+    """
+    if not phrase or not phrase.strip():
+        return TargetQuery()
+
+    cleaned = phrase.strip()
+
+    # Remove conversational command prefixes like "click the", "click", "select", etc.
+    prefixes_to_strip = [
+        "click on the ", "click the ", "click ",
+        "select the ", "select ",
+        "choose the ", "choose ",
+        "press the ", "press ",
+        "tap the ", "tap ",
+        "the ",
+    ]
+    cleaned_lower = cleaned.lower()
+    for prefix in prefixes_to_strip:
+        if cleaned_lower.startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+            cleaned_lower = cleaned.lower()
+            break
+
+    # 1. Check for spatial relationships (relational queries)
+    # Patterns: "<type> below/above/left of/right of/next to/beside/near <reference>"
+    relational_markers = [
+        (" to the right of ", RELATION_RIGHT),
+        (" to the left of ", RELATION_LEFT),
+        (" to the right ", RELATION_RIGHT),
+        (" to the left ", RELATION_LEFT),
+        (" right of ", RELATION_RIGHT),
+        (" left of ", RELATION_LEFT),
+        (" below ", RELATION_BELOW),
+        (" under ", RELATION_BELOW),
+        (" above ", RELATION_ABOVE),
+        (" next to ", RELATION_BESIDE),
+        (" beside ", RELATION_BESIDE),
+        (" near ", RELATION_NEAREST),
+        (" nearest ", RELATION_NEAREST),
+        (" closest to ", RELATION_NEAREST),
+    ]
+
+    for marker, relation in relational_markers:
+        if marker in cleaned_lower:
+            parts = cleaned_lower.split(marker, 1)
+            target_type = parts[0].strip()
+            ref_idx = cleaned_lower.find(marker) + len(marker)
+            reference = cleaned[ref_idx:].strip().strip("\"'.,")
+
+            # Extract any element_type or group from prefix
+            element_type = None
+            group = None
+            if target_type in ("button", "input", "icon", "link", "field"):
+                element_type = target_type
+            elif target_type in ("option", "search result", "result", "item"):
+                group = target_type
+
+            return TargetQuery(
+                element_type=element_type,
+                group=group,
+                relation=relation,
+                reference=reference,
+            )
+
+    # 2. Check for ordinal queries ("second search result", "last option", "third item")
+    words = cleaned.split()
+    if words:
+        first_word = words[0].lower()
+        ordinal = parse_ordinal(first_word)
+        if ordinal is not None and len(words) > 1:
+            rest = " ".join(words[1:]).strip().strip("\"'.,")
+            return TargetQuery(
+                ordinal=ordinal,
+                group=rest,
+            )
+
+        # Multi-word ordinals: "second last option", "second-last option"
+        if len(words) >= 3:
+            first_two = f"{words[0]} {words[1]}".lower()
+            ordinal = parse_ordinal(first_two)
+            if ordinal is not None:
+                rest = " ".join(words[2:]).strip().strip("\"'.,")
+                return TargetQuery(
+                    ordinal=ordinal,
+                    group=rest,
+                )
+
+    # 3. Simple text query
+    return TargetQuery(text=cleaned.strip("\"'.,"))

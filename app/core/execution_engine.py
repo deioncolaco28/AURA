@@ -17,7 +17,10 @@ from app.core.replanner import (
     NoOpReplanner,
     Replanner,
 )
-from app.intelligence.action import Action
+from app.intelligence.action import (
+    Action,
+    ActionType,
+)
 from app.intelligence.task import Task
 
 

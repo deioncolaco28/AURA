@@ -105,6 +105,41 @@ class ObservationDiff:
         )
 
     @property
+    def screen_changed(self) -> bool:
+        """Alias for any_change."""
+        return self.any_change
+
+    @property
+    def text_added(self) -> list[str]:
+        """Alias for added_text."""
+        return self.added_text
+
+    @property
+    def text_removed(self) -> list[str]:
+        """Alias for removed_text."""
+        return self.removed_text
+
+    @property
+    def elements_added(self) -> list[UIElement]:
+        """Alias for added_elements."""
+        return self.added_elements
+
+    @property
+    def elements_removed(self) -> list[UIElement]:
+        """Alias for removed_elements."""
+        return self.removed_elements
+
+    @property
+    def elements_moved(self) -> list[UIElement]:
+        """Alias for changed_elements."""
+        return self.changed_elements
+
+    @property
+    def foreground_changed(self) -> bool:
+        """Alias for window_title_changed."""
+        return self.window_title_changed
+
+    @property
     def process_change(self) -> bool:
         """True when any process started or stopped."""
 

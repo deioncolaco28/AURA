@@ -18,6 +18,7 @@ class RuleBasedTaskDecomposer:
             "display_name": "Notepad",
             "executable": "notepad",
             "process": "notepad.exe",
+            "processes": ["notepad.exe"],
         },
         "calculator": {
             "display_name": "Calculator",
@@ -57,6 +58,36 @@ class RuleBasedTaskDecomposer:
             "processes": [
                 "explorer.exe",
             ],
+        },
+        "chrome": {
+            "display_name": "Google Chrome",
+            "executable": "chrome",
+            "process": "chrome.exe",
+            "processes": ["chrome.exe"],
+        },
+        "google chrome": {
+            "display_name": "Google Chrome",
+            "executable": "chrome",
+            "process": "chrome.exe",
+            "processes": ["chrome.exe"],
+        },
+        "edge": {
+            "display_name": "Microsoft Edge",
+            "executable": "msedge",
+            "process": "msedge.exe",
+            "processes": ["msedge.exe"],
+        },
+        "msedge": {
+            "display_name": "Microsoft Edge",
+            "executable": "msedge",
+            "process": "msedge.exe",
+            "processes": ["msedge.exe"],
+        },
+        "microsoft edge": {
+            "display_name": "Microsoft Edge",
+            "executable": "msedge",
+            "process": "msedge.exe",
+            "processes": ["msedge.exe"],
         },
     }
 
@@ -177,6 +208,11 @@ class RuleBasedTaskDecomposer:
                 if parsed.scheme and parsed.netloc:
                     return candidate
 
+        # If the request matches a registered desktop application (e.g. "Google Chrome"),
+        # do not greedily interpret "google" as a website alias.
+        if self._find_application(goal.strip().lower()) is not None:
+            return None
+
         # Then handle domains / known website aliases.
         normalized_words = [
             word.strip(
@@ -247,18 +283,25 @@ class RuleBasedTaskDecomposer:
         self,
         text: str,
     ) -> str | None:
+        has_verb = any(
+            verb in text
+            for verb in (
+                "open",
+                "launch",
+                "start",
+            )
+        )
 
-        for name in self.APPLICATIONS:
-            if name in text:
-                if any(
-                    verb in text
-                    for verb in (
-                        "open",
-                        "launch",
-                        "start",
-                    )
-                ):
-                    return name
+        # Check longer names first (e.g. "google chrome" before "chrome")
+        sorted_names = sorted(
+            self.APPLICATIONS.keys(),
+            key=len,
+            reverse=True,
+        )
+
+        for name in sorted_names:
+            if name in text and has_verb:
+                return name
 
         return None
 
@@ -302,71 +345,45 @@ class RuleBasedTaskDecomposer:
         info: dict,
     ) -> list[Action]:
         """
-        Preserve the existing Notepad tutoring workflow.
+        Tutoring workflow for opening applications via Start menu.
 
         AURA provides instructions but does not perform
         the user's tutoring actions.
         """
 
         display_name = info["display_name"]
-
-        if display_name == "Notepad":
-            return [
-                Action(
-                    action_type=ActionType.SPEAK,
-                    value=(
-                        "I will show you how to open Notepad."
-                    ),
-                ),
-                Action(
-                    action_type=ActionType.PRESS_KEY,
-                    value="win",
-                    parameters={"key": "win"},
-                ),
-                Action(
-                    action_type=ActionType.TYPE_TEXT,
-                    value="Notepad",
-                    parameters={"text": "Notepad"},
-                    verification={
-                        "type": "SCREEN_CONTAINS_TEXT",
-                        "text": "Notepad",
-                    },
-                ),
-                Action(
-                    action_type=ActionType.CLICK,
-                    target="Notepad",
-                    description=(
-                        "Click the Notepad search result."
-                    ),
-                    verification={
-                        "type": "APPLICATION_RUNNING",
-                        "processes": [
-                            "notepad.exe",
-                        ],
-                    },
-                ),
-            ]
+        processes = info.get("processes") or ([info["process"]] if "process" in info else [])
 
         return [
             Action(
                 action_type=ActionType.SPEAK,
                 value=(
-                    f"I will show you how to open "
-                    f"{display_name}."
+                    f"I will show you how to open {display_name}."
                 ),
             ),
             Action(
-                action_type=ActionType.LAUNCH_APPLICATION,
-                target=info["executable"],
+                action_type=ActionType.PRESS_KEY,
+                value="win",
+                parameters={"key": "win"},
+            ),
+            Action(
+                action_type=ActionType.TYPE_TEXT,
+                value=display_name,
+                parameters={"text": display_name},
+                verification={
+                    "type": "SCREEN_CONTAINS_TEXT",
+                    "text": display_name,
+                },
+            ),
+            Action(
+                action_type=ActionType.CLICK,
+                target=display_name,
                 description=(
-                    f"Open {display_name}."
+                    f"Click the {display_name} search result."
                 ),
                 verification={
                     "type": "APPLICATION_RUNNING",
-                    "processes": info.get(
-                        "processes",
-                        [],
-                    ),
+                    "processes": processes,
                 },
             ),
         ]

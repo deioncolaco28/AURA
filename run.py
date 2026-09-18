@@ -58,6 +58,14 @@ def main() -> None:
     print("Listening for commands...")
     print()
 
+    # Lifecycle startup greeting via VoiceManager / TTS
+    try:
+        agent.voice_manager.speak(
+            "Hello! I'm AURA. I'm ready to help. Please tell me what you'd like me to do."
+        )
+    except Exception as exc:
+        print(f"Startup greeting failed: {exc}")
+
     while True:
         try:
             text = agent.voice_manager.listen()
@@ -72,7 +80,7 @@ def main() -> None:
                 "goodbye",
             }:
                 agent.voice_manager.speak(
-                    "Goodbye."
+                    "Goodbye! Have a great day."
                 )
                 break
 
@@ -87,6 +95,10 @@ def main() -> None:
         except KeyboardInterrupt:
             print()
             print("AURA stopped by user.")
+            try:
+                agent.voice_manager.speak("Goodbye!")
+            except Exception:
+                pass
             break
 
         except Exception as error:

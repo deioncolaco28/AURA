@@ -69,6 +69,15 @@ class Agent:
     # MAIN ENTRY POINT
     # ------------------------------------------------------------------
 
+    def run_once(self):
+        """Listen for a single voice command and process it."""
+        if self.voice_manager is None:
+            raise RuntimeError("VoiceManager is required for run_once().")
+        text = self.voice_manager.listen()
+        if text:
+            return self.process_text(text)
+        return None
+
     def process_text(self, text: str):
         """
         Process a user command from text/STT.
@@ -405,6 +414,14 @@ class Agent:
         action: Action,
     ) -> Action:
 
+        # Non-executable communication action: route to voice/TTS.
+        # NEVER send through the desktop action executor.
+        if action.action_type == ActionType.SPEAK:
+            message = str(action.value or action.description or "")
+            if message:
+                self._speak(message)
+            return action
+
         if self.action_executor is not None:
             result = self.action_executor.execute(
                 action
@@ -451,6 +468,9 @@ class Agent:
         action: Action,
     ) -> None:
 
+        if action.action_type == ActionType.SPEAK:
+            return
+
         verification = getattr(
             action,
             "verification",
@@ -492,21 +512,23 @@ class Agent:
                 "process"
             )
 
+            target_process = process or (processes[0] if processes and len(processes) == 1 else None)
+
             if self.application_verifier is not None:
 
-                if processes:
+                if target_process:
+                    result = (
+                        self.application_verifier.verify(
+                            target_process
+                        )
+                    )
+
+                elif processes:
                     result = (
                         self.application_verifier.verify(
                             self._verification_action(
                                 processes=processes
                             )
-                        )
-                    )
-
-                elif process:
-                    result = (
-                        self.application_verifier.verify(
-                            process
                         )
                     )
 
@@ -520,16 +542,16 @@ class Agent:
 
                 verifier = ApplicationVerifier()
 
-                if processes:
+                if target_process:
+                    result = verifier.verify(
+                        target_process
+                    )
+
+                elif processes:
                     result = verifier.verify(
                         self._verification_action(
                             processes=processes
                         )
-                    )
-
-                elif process:
-                    result = verifier.verify(
-                        process
                     )
 
                 else:
@@ -683,7 +705,16 @@ class Agent:
         message: str,
     ) -> None:
 
+        if not message or not str(message).strip():
+            return
+
+        clean = str(message).strip()
+
         if self.voice_manager is not None:
-            self.voice_manager.speak(
-                message
-            )
+            try:
+                self.voice_manager.speak(clean)
+                return
+            except Exception as exc:
+                print(f"Voice manager failed: {exc}")
+
+        print(f"AURA: {clean}")

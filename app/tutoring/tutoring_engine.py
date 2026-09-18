@@ -28,6 +28,7 @@ from app.perception.ocr import OCR, TesseractOCR
 from app.perception.screenshot import ScreenshotCapture
 from app.perception.spatial_reasoner import SpatialReasoner
 from app.perception.target_query import TargetQuery
+from app.perception.ui_element import to_ui_elements
 from app.tutoring.instruction import TutoringInstruction
 
 
@@ -124,7 +125,7 @@ class TutoringEngine:
 
         try:
             image = self.screenshot_capture.capture()
-            elements = self.ocr.detect_text(image)
+            elements = to_ui_elements(self.ocr.detect_text(image))
 
             if not elements:
                 return None
@@ -255,7 +256,7 @@ class TutoringEngine:
 
         try:
             image = self.screenshot_capture.capture()
-            elements = self.ocr.detect_text(image)
+            elements = to_ui_elements(self.ocr.detect_text(image))
             result = self.grounder.ground(
                 elements=elements,
                 target=target,

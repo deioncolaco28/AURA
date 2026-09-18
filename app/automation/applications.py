@@ -16,6 +16,11 @@ class ApplicationController:
         "paint": "mspaint.exe",
         "explorer": "explorer.exe",
         "file explorer": "explorer.exe",
+        "chrome": "chrome.exe",
+        "google chrome": "chrome.exe",
+        "edge": "msedge.exe",
+        "msedge": "msedge.exe",
+        "microsoft edge": "msedge.exe",
     }
 
     def resolve(self, application: str) -> str:

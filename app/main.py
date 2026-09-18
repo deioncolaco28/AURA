@@ -27,7 +27,21 @@ def main():
     print("\nAURA is ready.")
     print("Say a command...\n")
 
-    agent.run_once()
+    # Lifecycle startup greeting via VoiceManager / TTS
+    try:
+        voice_manager.speak(
+            "Hello! I'm AURA. I'm ready to help. Please tell me what you'd like me to do."
+        )
+    except Exception as exc:
+        print(f"Startup greeting failed: {exc}")
+
+    try:
+        agent.run_once()
+    finally:
+        try:
+            voice_manager.speak("Goodbye!")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

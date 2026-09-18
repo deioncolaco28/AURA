@@ -69,6 +69,15 @@ class ScreenObserver(ComputerObserver):
 
         processes = self._get_running_processes()
         window_title = self._get_foreground_window()
+        foreground_app = self._get_foreground_process()
+
+        dimensions = getattr(screenshot, "size", None) if screenshot is not None else None
+        if isinstance(dimensions, tuple) and len(dimensions) == 2:
+            screen_dimensions = (int(dimensions[0]), int(dimensions[1]))
+        else:
+            screen_dimensions = None
+
+        screen_sig = f"{len(perception.elements)}:{len(screen_text)}:{hash(screen_text) & 0xFFFFFFFF:08x}"
 
         return ScreenObservation(
             screen_text=screen_text,
@@ -79,6 +88,9 @@ class ScreenObserver(ComputerObserver):
             timestamp=time.time(),
             processes=processes,
             window_title=window_title,
+            foreground_app=foreground_app,
+            screen_dimensions=screen_dimensions,
+            screen_signature=screen_sig,
             metadata={
                 "sources_used": (
                     perception.sources_used
@@ -158,5 +170,30 @@ class ScreenObserver(ComputerObserver):
             GetWindowTextW(hwnd, buf, length + 1)
             return buf.value or None
 
+        except Exception:
+            return None
+
+    @staticmethod
+    def _get_foreground_process() -> str | None:
+        """
+        Return the process name of the foreground window on Windows.
+        """
+        try:
+            import ctypes
+            import psutil
+
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if not hwnd:
+                return None
+
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(
+                hwnd, ctypes.byref(pid)
+            )
+
+            if pid.value:
+                return psutil.Process(pid.value).name().lower()
+
+            return None
         except Exception:
             return None
