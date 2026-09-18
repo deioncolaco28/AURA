@@ -27,6 +27,14 @@ class AURALogger:
             self.log_directory
             / "aura.log"
         )
+        self.trace_file = (
+            self.log_directory
+            / "aura_traces.jsonl"
+        )
+
+    def record_trace(self, trace) -> None:
+        """Record a completed TaskTrace to the trace log file."""
+        trace.save_jsonl(self.trace_file)
 
     def log(
         self,

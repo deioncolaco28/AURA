@@ -37,6 +37,8 @@ from app.intelligence.action import (
 from app.intelligence.expected_state import ExpectedState, StateComparator
 from app.intelligence.task import Task
 from app.intelligence.task_context import EntityResolver, TaskContext
+import time
+from app.logging.trace import ExecutionMetrics, TaskTrace, TaskTraceEvent
 from app.intelligence.task_graph import NodeStatus, TaskGraph, TaskNode
 
 
@@ -76,6 +78,7 @@ class ExecutionEngine:
         self.recovery_engine = RecoveryEngine(replanner=self.replanner)
         self.state_comparator = StateComparator()
         self.entity_resolver = EntityResolver(self.task_context)
+        self.last_trace: TaskTrace | None = None
 
     def run(
         self,
@@ -88,6 +91,9 @@ class ExecutionEngine:
             return self.run_graph(task_or_graph)
 
         task = task_or_graph
+        trace = TaskTrace(task_id=f"task_{int(time.time()*1000)}", goal=task.goal)
+        self.last_trace = trace
+
         context = ExecutionContext(
             goal=task.goal,
             total_steps=task.total_actions,
@@ -149,12 +155,20 @@ class ExecutionEngine:
             context.metadata["replan_count"] = replan_count
 
         context.metadata["replan_count"] = replan_count
+        if self.last_trace:
+            self.last_trace.metrics.replans_count = replan_count
+            self.last_trace.complete(status="COMPLETED" if context.completed else "FAILED")
+            context.metadata["trace"] = self.last_trace
+            context.metadata["metrics"] = self.last_trace.metrics.to_dict()
         return context
 
     def run_graph(self, graph: TaskGraph) -> ExecutionContext:
         """
         Execute a TaskGraph respecting node dependencies, conditions, and states.
         """
+        trace = TaskTrace(task_id=f"graph_{int(time.time()*1000)}", goal=graph.goal)
+        self.last_trace = trace
+
         context = ExecutionContext(
             goal=graph.goal,
             total_steps=len(graph),
@@ -200,7 +214,7 @@ class ExecutionEngine:
                     context.current_step += 1
                     step = context.add_step(node.action)
 
-                    self._run_step(step, context, expected_state=node.expected_state)
+                    self._run_step(step, context, expected_state=node.expected_state, node_id=node.task_id)
 
                     if step.status == "COMPLETED":
                         graph.mark_completed(node.task_id, result=node.action.execution_result)
@@ -214,6 +228,12 @@ class ExecutionEngine:
                         self.task_context.record_failure(failure_info)
                         break
 
+        if self.last_trace:
+            st = "COMPLETED" if graph.is_completed() else ("CANCELLED" if graph.is_cancelled() else "FAILED")
+            self.last_trace.complete(status=st)
+            context.metadata["trace"] = self.last_trace
+            context.metadata["metrics"] = self.last_trace.metrics.to_dict()
+
         return context
 
     def _run_step(
@@ -221,11 +241,13 @@ class ExecutionEngine:
         step: ExecutionStep,
         context: ExecutionContext,
         expected_state: ExpectedState | None = None,
+        node_id: str = "",
     ) -> None:
         """Execute one action with bounded retries and state comparison."""
         total_attempts = self.max_retries + 1
 
         for attempt in range(1, total_attempts + 1):
+            t_start = time.perf_counter()
             step.attempts = attempt
             step.status = "RUNNING"
             step.error = None
@@ -247,6 +269,21 @@ class ExecutionEngine:
                     "failure_type": failure_info.failure_type,
                 }
                 print(f"Action attempt failed: {error}")
+                duration_ms = (time.perf_counter() - t_start) * 1000.0
+                if self.last_trace:
+                    self.last_trace.add_event(
+                        TaskTraceEvent(
+                            task_id=self.last_trace.task_id,
+                            node_id=node_id,
+                            goal=context.goal,
+                            action=step.action.action_type,
+                            target=str(step.action.target or ""),
+                            attempt=attempt,
+                            duration_ms=duration_ms,
+                            status="FAILED",
+                            failure_type=failure_info.failure_type,
+                        )
+                    )
                 if attempt < total_attempts and failure_info.recoverability:
                     context.mark_recovering(step)
                 continue
@@ -269,6 +306,7 @@ class ExecutionEngine:
                     if not comp_res.success:
                         raise RuntimeError(comp_res.explanation)
 
+                duration_ms = (time.perf_counter() - t_start) * 1000.0
                 context.mark_completed(
                     step,
                     verification={
@@ -276,6 +314,20 @@ class ExecutionEngine:
                         "attempt": attempt,
                     },
                 )
+                if self.last_trace:
+                    self.last_trace.add_event(
+                        TaskTraceEvent(
+                            task_id=self.last_trace.task_id,
+                            node_id=node_id,
+                            goal=context.goal,
+                            action=executed_action.action_type,
+                            target=str(executed_action.target or ""),
+                            attempt=attempt,
+                            duration_ms=duration_ms,
+                            status="COMPLETED",
+                            verification_result={"success": True},
+                        )
+                    )
                 return
 
             except Exception as error:
@@ -293,6 +345,22 @@ class ExecutionEngine:
                     "type": executed_action.verification.get("type"),
                 }
                 print(f"Verification failed: {error}")
+                duration_ms = (time.perf_counter() - t_start) * 1000.0
+                if self.last_trace:
+                    self.last_trace.add_event(
+                        TaskTraceEvent(
+                            task_id=self.last_trace.task_id,
+                            node_id=node_id,
+                            goal=context.goal,
+                            action=executed_action.action_type,
+                            target=str(executed_action.target or ""),
+                            attempt=attempt,
+                            duration_ms=duration_ms,
+                            status="FAILED",
+                            failure_type=failure_info.failure_type,
+                            verification_result={"success": False, "error": str(error)},
+                        )
+                    )
                 if attempt < total_attempts and failure_info.recoverability:
                     context.mark_recovering(step)
 

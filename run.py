@@ -27,25 +27,34 @@ def create_agent() -> Agent:
     )
 
 
+from app.core.health import HealthChecker
+
+
 def print_banner() -> None:
     print()
-    print("=" * 60)
-    print("       AURA - Automated User Response Assistant")
-    print("=" * 60)
+    print("=" * 65)
+    print("        AURA - Automated User Response Assistant (v1.0)")
+    print("=" * 65)
     print()
-    print("Voice-controlled computer-use assistant")
+    print("Voice & Text Whole-PC Automation & Tutoring Assistant")
+    print()
+    print("System Readiness Status:")
+    report = HealthChecker.check_system()
+    for line in report.summary_lines():
+        print(line)
     print()
     print("Modes:")
-    print("  • Do It For Me")
-    print("  • Show Me How")
+    print("  • Do It For Me (Autonomous Execution)")
+    print("  • Show Me How  (Interactive Step-by-Step Tutoring)")
     print()
     print("Examples:")
-    print("  Open Notepad")
-    print("  Open Calculator")
-    print("  Show me how to open Notepad")
+    print("  • Open Notepad and type Hello AURA")
+    print("  • Open the report, summarize it, and save as Word document")
+    print("  • Find the highest AQI value in this spreadsheet")
+    print("  • Show me how to open Calculator")
     print()
-    print("Say 'exit' to stop.")
-    print("=" * 60)
+    print("Type or say 'exit' / 'stop' to quit.")
+    print("=" * 65)
     print()
 
 

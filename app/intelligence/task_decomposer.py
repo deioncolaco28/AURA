@@ -128,6 +128,47 @@ class RuleBasedTaskDecomposer:
             return self._decompose_chrome_search(goal, mode)
 
         # ------------------------------------------------------------------
+        # Cross-App Workflow: Chrome navigate
+        # "open chrome and go to / navigate to X"
+        # ------------------------------------------------------------------
+        if "chrome" in normalized and ("go to" in normalized or "navigate to" in normalized or "open google" in normalized):
+            target_url = "https://www.google.com"
+            for word in goal.split():
+                if "." in word and not word.endswith(".exe") and not word.endswith("."):
+                    target_url = word.strip("\"'.,")
+                    if not target_url.startswith("http"):
+                        target_url = "https://" + target_url
+                    break
+                elif word.lower() in ("google", "youtube", "wikipedia"):
+                    target_url = f"https://www.{word.lower()}.com"
+                    break
+
+            return [
+                Action(
+                    action_id="act_open_chrome",
+                    action_type=ActionType.LAUNCH_APPLICATION,
+                    target="chrome",
+                    description="Launch Google Chrome.",
+                    verification={"type": "APPLICATION_RUNNING", "processes": ["chrome.exe"]},
+                ),
+                Action(
+                    action_id="act_navigate_url",
+                    action_type=ActionType.NAVIGATE_URL,
+                    target=target_url,
+                    dependencies=["act_open_chrome"],
+                    description=f"Navigate to {target_url}.",
+                    verification={"type": "BROWSER_URL", "url": target_url},
+                ),
+            ]
+
+        # ------------------------------------------------------------------
+        # Content Intelligence Workflows (PDF, DOCX, XLSX, PPTX, Web, QA)
+        # ------------------------------------------------------------------
+        content_actions = self._decompose_content(goal, mode)
+        if content_actions:
+            return content_actions
+
+        # ------------------------------------------------------------------
         # Filesystem / File Explorer Workflows
         # ------------------------------------------------------------------
         if (
@@ -143,18 +184,14 @@ class RuleBasedTaskDecomposer:
             or "delete file" in normalized
             or "delete " in normalized
             or "search files" in normalized
-            or "search for" in normalized and "file" in normalized
+            or "find file" in normalized
+            or "locate file" in normalized
+            or ("find " in normalized and "." in normalized)
+            or ("search for" in normalized and "file" in normalized)
         ):
             fs_actions = self._decompose_filesystem(goal, mode)
             if fs_actions:
                 return fs_actions
-
-        # ------------------------------------------------------------------
-        # Content Intelligence Workflows (PDF, DOCX, XLSX, PPTX, Web, QA)
-        # ------------------------------------------------------------------
-        content_actions = self._decompose_content(goal, mode)
-        if content_actions:
-            return content_actions
 
         browser_url = self._extract_url(goal)
 
@@ -180,6 +217,16 @@ class RuleBasedTaskDecomposer:
                 application,
                 mode,
             )
+
+        if normalized.startswith("click "):
+            target = goal.strip()[len("click "):].strip("\"'.,")
+            return [
+                Action(
+                    action_type=ActionType.CLICK,
+                    target=target,
+                    description=f"Click '{target}'.",
+                )
+            ]
 
         return [
             Action(
@@ -579,9 +626,11 @@ class RuleBasedTaskDecomposer:
             for prefix in ("called ", "named ", "folder ", "directory "):
                 if prefix in normalized:
                     part = normalized.split(prefix)[1].strip("\"'.,")
-                    if part:
+                    if " in " in part:
+                        target_name = part.split(" in ")[0].strip("\"'.,")
+                    else:
                         target_name = part.split()[0]
-                        break
+                    break
             return [
                 Action(
                     action_type=ActionType.CREATE_FOLDER,
@@ -668,13 +717,19 @@ class RuleBasedTaskDecomposer:
                 )
             ]
 
-        # "search files for X" or "search for X in files"
-        if "search" in normalized:
+        # "search files for X" or "search for X in files" or "find file X"
+        if "search" in normalized or "find file" in normalized or "locate file" in normalized or ("find " in normalized and "." in normalized):
             query = "report"
             if "search for " in normalized:
                 query = normalized.split("search for ")[1].split()[0].strip("\"'.,")
             elif "search files for " in normalized:
                 query = normalized.split("search files for ")[1].split()[0].strip("\"'.,")
+            elif "find file " in normalized:
+                query = normalized.split("find file ")[1].split()[0].strip("\"'.,")
+            elif "locate file " in normalized:
+                query = normalized.split("locate file ")[1].split()[0].strip("\"'.,")
+            elif "find " in normalized:
+                query = normalized.split("find ")[1].split()[0].strip("\"'.,")
             return [
                 Action(
                     action_type=ActionType.SEARCH_FILES,
