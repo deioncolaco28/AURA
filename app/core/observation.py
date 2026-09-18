@@ -1,3 +1,11 @@
+"""
+app/core/observation.py
+
+Unified model of perceived screen and computer state.
+"""
+
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -7,25 +15,7 @@ from app.perception.ui_element import UIElement
 @dataclass
 class ScreenObservation:
     """
-    Represents the assistant's current observation of
-    the computer screen.
-
-    Fields
-    ------
-    screen_text : str
-        Concatenated visible text from all detected UI elements.
-    elements : list[UIElement]
-        Perceived UI elements.
-    screenshot : Any
-        Raw screenshot image (PIL Image or similar).
-    metadata : dict
-        Arbitrary per-observation context.
-    timestamp : float | None
-        Unix timestamp of when the observation was captured.
-    processes : list[str]
-        Running process names at observation time (if available).
-    window_title : str | None
-        Foreground window title at observation time (if available).
+    Represents the assistant's current observation of the computer screen.
     """
 
     screen_text: str = ""
@@ -59,6 +49,23 @@ class ScreenObservation:
     #: Foreground application/process name at observation time.
     foreground_app: str | None = None
 
+    #: Rich foreground application context.
+    foreground_context: Any = None
+
+    #: Active browser URL if observed in browser.
+    url: str | None = None
+
+    #: UI Element Graph representation of interface hierarchy.
+    ui_graph: Any = None
+
+    #: Overall perception confidence (0.0 - 1.0).
+    perception_confidence: float = 0.0
+
+    #: Perception sources utilized (e.g. ['ACCESSIBILITY', 'OCR', 'VLM']).
+    sources_used: list[str] = field(
+        default_factory=list
+    )
+
     #: Screen dimensions (width, height) in pixels.
     screen_dimensions: tuple[int, int] | None = None
 
@@ -68,7 +75,6 @@ class ScreenObservation:
     @property
     def has_text(self) -> bool:
         """Return True when screen text is available."""
-
         return bool(
             self.screen_text.strip()
         )
@@ -76,7 +82,6 @@ class ScreenObservation:
     @property
     def element_count(self) -> int:
         """Return the number of detected UI elements."""
-
         return len(self.elements)
 
     def contains_text(
@@ -84,7 +89,6 @@ class ScreenObservation:
         text: str,
     ) -> bool:
         """Check whether the observed screen contains text."""
-
         if not text:
             return False
 

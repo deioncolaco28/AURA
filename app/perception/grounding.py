@@ -137,17 +137,23 @@ class UIGrounder:
         reasoner = SpatialReasoner()
 
         # ----------------------------------------------------------
-        # Ordinal query: "second item", "last result"
         # ----------------------------------------------------------
-        if query.has_ordinal:
+        # Ordinal query: "second item", "last result", "second button from left"
+        # ----------------------------------------------------------
+        if query.has_ordinal and not query.has_relation:
             # Filter candidates by text/type/group first if specified.
             candidates = self._filter_candidates(
                 elements, query
             )
 
-            spatial = reasoner.resolve_ordinal(
+            axis = query.ordinal_axis or "reading_order"
+            direction = query.ordinal_direction or "left_to_right"
+
+            spatial = reasoner.resolve_axis_ordinal(
                 candidates,
                 query.ordinal,
+                axis=axis,
+                direction=direction,
             )
 
             return GroundingResult(
@@ -158,7 +164,7 @@ class UIGrounder:
             )
 
         # ----------------------------------------------------------
-        # Relational query: "option below Calculator"
+        # Relational query: "option below Calculator", "button between X and Y"
         # ----------------------------------------------------------
         if query.has_relation:
             # Find the reference element first.
@@ -177,11 +183,20 @@ class UIGrounder:
                 )
 
             reference_element = reference_result.element
+            rel_meta = {}
+
+            if query.relation == "between" and "reference_b" in query.metadata:
+                ref_b_res = self.find_text(
+                    elements=elements,
+                    target=query.metadata["reference_b"],
+                )
+                if ref_b_res.found and ref_b_res.element is not None:
+                    rel_meta["reference_b_element"] = ref_b_res.element
 
             # Candidates are all elements except the reference.
             candidates = [
                 e for e in elements
-                if e is not reference_element
+                if e.element_id != reference_element.element_id
             ]
 
             # Filter by type/group if specified.
@@ -194,7 +209,12 @@ class UIGrounder:
                 candidates,
                 relation,
                 reference_element,
+                metadata=rel_meta,
             )
+
+            if spatial.found and query.has_ordinal and len(candidates) > 1:
+                # If both relation and ordinal are specified: e.g. "first item under Downloads"
+                pass
 
             return GroundingResult(
                 found=spatial.found,

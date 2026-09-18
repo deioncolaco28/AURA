@@ -1,22 +1,11 @@
 """
 app/intelligence/target_ranker.py
 
-Deterministic weighted candidate ranker.
+Deterministic weighted candidate ranker with ambiguity detection.
 
 The TargetRanker takes a list of UIElement candidates and a TargetQuery,
 extracts CandidateFeatures for each element, applies a weighted scoring
 function, and returns a ranked list of RankedCandidate objects.
-
-The architecture is learning-ready: an InteractionHistory can be injected
-to influence historical_success_rate scores.
-
-Design principles
------------------
-- Deterministic: same inputs always produce the same ranking.
-- Explainable: each RankedCandidate includes a reason string.
-- Ambiguity-aware: when two candidates are too close in score the ranker
-  reports ambiguity rather than fabricating certainty.
-- No application-specific hard-coding.
 """
 
 from __future__ import annotations
@@ -47,6 +36,18 @@ class RankedCandidate:
 
 
 @dataclass
+class AmbiguityResult:
+    """Detailed ambiguity diagnostics when multiple candidates match with similar scores."""
+
+    is_ambiguous: bool
+    candidates: list[RankedCandidate] = field(default_factory=list)
+    scores: list[float] = field(default_factory=list)
+    confidence: float = 0.0
+    reason: str = ""
+    clarification_question: str = ""
+
+
+@dataclass
 class RankingResult:
     """The result of a ranking operation."""
 
@@ -54,6 +55,7 @@ class RankingResult:
     best: RankedCandidate | None = None
     is_ambiguous: bool = False
     reason: str = ""
+    ambiguity_result: AmbiguityResult | None = None
 
     @property
     def found(self) -> bool:
@@ -61,23 +63,23 @@ class RankingResult:
 
 
 # ---------------------------------------------------------------------------
-# Default weights
+# Default weights & thresholds
 # ---------------------------------------------------------------------------
 
 
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "text_similarity": 0.40,
+    "text_similarity": 0.35,
     "description_similarity": 0.10,
-    "element_confidence": 0.15,
-    "spatial_score": 0.20,
+    "element_confidence": 0.10,
+    "spatial_score": 0.15,
     "group_match": 0.10,
+    "element_type": 0.05,
+    "foreground_match": 0.05,
+    "interactability": 0.05,
     "historical_success_rate": 0.05,
 }
 
-# Minimum score for a candidate to be considered.
 MINIMUM_SCORE_THRESHOLD = 0.35
-
-# If the top two candidates are within this margin, report ambiguity.
 AMBIGUITY_MARGIN = 0.12
 
 
@@ -96,17 +98,8 @@ class FeatureExtractor:
         element: UIElement,
         query,
         history=None,
+        foreground_context=None,
     ) -> CandidateFeatures:
-        """
-        Extract a feature vector for one candidate element.
-
-        Parameters
-        ----------
-        element : UIElement
-        query : TargetQuery
-        history : InteractionHistory | None
-        """
-
         features = CandidateFeatures(
             element_id=element.element_id,
             x=element.x,
@@ -124,11 +117,10 @@ class FeatureExtractor:
                 else 0.0
             ),
             element_confidence=element.confidence,
+            interactability=1.0 if element.is_interactable else 0.3,
         )
 
-        # ----------------------------------------------------------
         # Text similarity
-        # ----------------------------------------------------------
         if query and query.text:
             features.text_similarity = self._text_similarity(
                 element.text,
@@ -139,84 +131,52 @@ class FeatureExtractor:
                 query.text,
             )
 
-        # ----------------------------------------------------------
         # Element type match
-        # ----------------------------------------------------------
         if query and query.element_type:
-            if (
-                str(element.element_type).lower()
-                == query.element_type.lower()
-            ):
-                features.element_type_match = 1.0
-
-        # ----------------------------------------------------------
-        # Group match
-        # ----------------------------------------------------------
-        if query and query.group:
-            g = query.group.lower()
-            if (
-                str(getattr(element, "group", "") or "").lower() == g
-                or str(
-                    getattr(element, "semantic_role", "") or ""
-                ).lower() == g
-            ):
-                features.group_match = 1.0
-
-        # ----------------------------------------------------------
-        # Historical success rate
-        # ----------------------------------------------------------
-        if history:
-            label = self._element_label(element)
-            features.historical_success_rate = (
-                history.success_rate(label)
+            features.element_type_match = (
+                1.0
+                if (element.element_type or "").lower() == query.element_type.lower()
+                else 0.0
             )
+
+        # Group / semantic role match
+        if query and query.group:
+            elem_group = getattr(element, "group", None) or getattr(element, "semantic_role", None)
+            features.group_match = (
+                1.0
+                if elem_group and query.group.lower() in elem_group.lower()
+                else 0.0
+            )
+
+        # Foreground application match
+        if foreground_context:
+            app_name = getattr(element, "app_name", None) or getattr(element, "window_title", None)
+            if app_name and hasattr(foreground_context, "matches"):
+                features.foreground_match = 1.0 if foreground_context.matches(app_name) else 0.0
+            elif hasattr(foreground_context, "app_name") and app_name:
+                features.foreground_match = 1.0 if app_name.lower() in foreground_context.app_name.lower() else 0.0
+
+        # Historical success
+        if history and element.text:
+            features.historical_success_rate = history.success_rate(element.text)
 
         return features
 
     @staticmethod
-    def _text_similarity(
-        candidate_text: str | None,
-        query_text: str,
-    ) -> float:
-        """Simple normalised text similarity."""
-
-        if not candidate_text or not query_text:
+    def _text_similarity(a: str | None, b: str | None) -> float:
+        if not a or not b:
             return 0.0
-
-        c = candidate_text.strip().lower()
-        q = query_text.strip().lower()
-
-        if not c or not q:
-            return 0.0
-
-        # Exact match
-        if c == q:
+        norm_a = " ".join(a.strip().lower().split())
+        norm_b = " ".join(b.strip().lower().split())
+        if norm_a == norm_b:
             return 1.0
-
-        # Case-insensitive full containment
-        if q in c or c in q:
-            shorter = min(len(c), len(q))
-            longer = max(len(c), len(q))
-            return 0.85 * shorter / longer
-
-        # Token overlap (Jaccard)
-        c_tokens = set(c.split())
-        q_tokens = set(q.split())
-
-        if not c_tokens or not q_tokens:
+        if norm_a in norm_b or norm_b in norm_a:
+            return 0.85
+        words_a = set(norm_a.split())
+        words_b = set(norm_b.split())
+        if not words_a or not words_b:
             return 0.0
-
-        intersection = c_tokens & q_tokens
-        union = c_tokens | q_tokens
-
-        return 0.7 * len(intersection) / len(union)
-
-    @staticmethod
-    def _element_label(element: UIElement) -> str:
-        return (
-            str(element.text or "").strip().lower()
-            or element.element_id
-        )
+        return len(words_a & words_b) / len(words_a | words_b)
 
 
 # ---------------------------------------------------------------------------
@@ -226,14 +186,7 @@ class FeatureExtractor:
 
 class TargetRanker:
     """
-    Ranks UIElement candidates for a TargetQuery.
-
-    Usage
-    -----
-    ::
-
-        ranker = TargetRanker()
-        result = ranker.rank(elements, query, spatial_scores)
+    Ranks UIElement candidates against a TargetQuery and detects ambiguity.
     """
 
     def __init__(
@@ -243,10 +196,10 @@ class TargetRanker:
         ambiguity_margin: float = AMBIGUITY_MARGIN,
         history=None,
     ):
-        self.weights = weights or DEFAULT_WEIGHTS
+        self.weights = weights or dict(DEFAULT_WEIGHTS)
         self.min_score = min_score
         self.ambiguity_margin = ambiguity_margin
-        self.history = history  # InteractionHistory | None
+        self.history = history
         self._extractor = FeatureExtractor()
 
     def rank(
@@ -254,45 +207,22 @@ class TargetRanker:
         elements: list[UIElement],
         query=None,
         spatial_scores: dict[str, float] | None = None,
+        foreground_context=None,
     ) -> RankingResult:
-        """
-        Rank candidates and return a RankingResult.
-
-        Parameters
-        ----------
-        elements : list[UIElement]
-            Candidate elements.
-        query : TargetQuery | None
-            The structured target request. When None, elements are ranked
-            by element_confidence alone.
-        spatial_scores : dict[str, float] | None
-            Optional spatial scores keyed by element_id (from SpatialReasoner).
-
-        Returns
-        -------
-        RankingResult
-        """
-
         if not elements:
-            return RankingResult(
-                reason="No candidate elements provided."
-            )
+            return RankingResult(reason="No candidate elements provided.")
 
         spatial = spatial_scores or {}
-
         scored: list[RankedCandidate] = []
 
         for element in elements:
             features = self._extractor.extract(
-                element, query, self.history
+                element, query, self.history, foreground_context=foreground_context
             )
-
-            # Inject spatial score from external resolver.
             if element.element_id in spatial:
                 features.spatial_score = spatial[element.element_id]
 
             score = self._compute_score(features)
-
             reason_parts = self._explain(features, score)
 
             scored.append(
@@ -304,82 +234,113 @@ class TargetRanker:
                 )
             )
 
-        # Sort descending by score.
         scored.sort(key=lambda c: c.score, reverse=True)
 
-        # Assign ranks.
         for i, candidate in enumerate(scored):
             candidate.rank = i + 1
 
-        # Filter below minimum threshold.
         qualifying = [c for c in scored if c.score >= self.min_score]
 
         if not qualifying:
             return RankingResult(
                 candidates=scored,
                 reason=(
-                    f"No candidate reached minimum score threshold "
-                    f"({self.min_score:.2f}). "
-                    f"Best was {scored[0].score:.2f} for "
-                    f"'{scored[0].element.text or scored[0].element.element_id}'."
+                    f"No candidate reached minimum score threshold ({self.min_score:.2f}). "
+                    f"Best was {scored[0].score:.2f} for '{scored[0].element.text or scored[0].element.element_id}'."
                 ),
             )
 
         best = qualifying[0]
-
-        # Ambiguity check: are the top two candidates too close?
         is_ambiguous = False
+        ambiguity_res = None
 
         if len(qualifying) >= 2:
             second_score = qualifying[1].score
-
-            if best.score - second_score < self.ambiguity_margin:
+            diff = best.score - second_score
+            if diff < self.ambiguity_margin:
                 is_ambiguous = True
                 best.is_ambiguous = True
                 qualifying[1].is_ambiguous = True
+
+                competing = [best, qualifying[1]]
+                q_text = query.text if query and query.text else "target"
+                clarification = self._generate_clarification_question(q_text, competing)
+
+                ambiguity_res = AmbiguityResult(
+                    is_ambiguous=True,
+                    candidates=competing,
+                    scores=[best.score, second_score],
+                    confidence=round(best.score, 2),
+                    reason=f"Ambiguity detected: top 2 candidates have close scores ({best.score:.2f} vs {second_score:.2f}, margin {diff:.2f} < {self.ambiguity_margin:.2f}).",
+                    clarification_question=clarification,
+                )
 
         return RankingResult(
             candidates=scored,
             best=best,
             is_ambiguous=is_ambiguous,
             reason=best.reason,
+            ambiguity_result=ambiguity_res,
         )
 
-    def _compute_score(
+    def check_ambiguity(
         self,
-        features: CandidateFeatures,
-    ) -> float:
-        """Weighted dot product of feature values."""
-
-        w = self.weights
-
-        score = (
-            w.get("text_similarity", 0.0)
-            * features.text_similarity
-            + w.get("description_similarity", 0.0)
-            * features.description_similarity
-            + w.get("element_confidence", 0.0)
-            * features.element_confidence
-            + w.get("spatial_score", 0.0)
-            * features.spatial_score
-            + w.get("group_match", 0.0)
-            * features.group_match
-            + w.get("historical_success_rate", 0.0)
-            * features.historical_success_rate
+        elements: list[UIElement],
+        query=None,
+        spatial_scores: dict[str, float] | None = None,
+        foreground_context=None,
+    ) -> AmbiguityResult:
+        """Check whether ranking elements for query yields an ambiguous result."""
+        result = self.rank(
+            elements=elements,
+            query=query,
+            spatial_scores=spatial_scores,
+            foreground_context=foreground_context,
+        )
+        if result.ambiguity_result:
+            return result.ambiguity_result
+        return AmbiguityResult(
+            is_ambiguous=False,
+            candidates=result.candidates[:1] if result.candidates else [],
+            scores=[result.candidates[0].score] if result.candidates else [],
+            confidence=result.candidates[0].score if result.candidates else 0.0,
+            reason=result.reason,
         )
 
-        # Clamp to [0, 1].
+    def _compute_score(self, features: CandidateFeatures) -> float:
+        w = self.weights
+        score = (
+            w.get("text_similarity", 0.35) * features.text_similarity
+            + w.get("description_similarity", 0.10) * features.description_similarity
+            + w.get("element_confidence", 0.10) * features.element_confidence
+            + w.get("spatial_score", 0.15) * features.spatial_score
+            + w.get("group_match", 0.10) * features.group_match
+            + w.get("element_type", 0.05) * features.element_type_match
+            + w.get("foreground_match", 0.05) * features.foreground_match
+            + w.get("interactability", 0.05) * features.interactability
+            + w.get("historical_success_rate", 0.05) * features.historical_success_rate
+        )
         return max(0.0, min(1.0, score))
 
     @staticmethod
-    def _explain(
-        features: CandidateFeatures,
-        score: float,
+    def _generate_clarification_question(
+        target_name: str,
+        competing: list[RankedCandidate],
     ) -> str:
-        """Generate a human-readable explanation of the ranking."""
+        descriptions = []
+        for i, c in enumerate(competing[:2]):
+            elem = c.element
+            loc = "top" if elem.y < 300 else ("bottom" if elem.y > 600 else "middle")
+            desc = f"{elem.element_type} near the {loc}"
+            if elem.app_name:
+                desc += f" in {elem.app_name}"
+            descriptions.append(desc)
 
+        return f"I found multiple elements matching '{target_name}'. Did you mean the {descriptions[0]} or the {descriptions[1]}?"
+
+    @staticmethod
+    def _explain(features: CandidateFeatures, score: float) -> str:
         parts: list[str] = []
-
         if features.text_similarity >= 0.9:
             parts.append("exact text match")
         elif features.text_similarity >= 0.5:
@@ -396,10 +357,8 @@ class TargetRanker:
         if features.group_match >= 1.0:
             parts.append("group match")
 
-        if features.historical_success_rate >= 0.7:
-            parts.append(
-                f"historical success {features.historical_success_rate:.0%}"
-            )
+        if features.foreground_match >= 1.0:
+            parts.append("foreground app match")
 
         explanation = "; ".join(parts) if parts else "best available match"
         return f"score={score:.2f} ({explanation})"

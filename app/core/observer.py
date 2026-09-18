@@ -1,7 +1,16 @@
+"""
+app/core/observer.py
+
+Captures and coordinates screen observation using the perception pipeline.
+"""
+
+from __future__ import annotations
+
 import time
 from abc import ABC, abstractmethod
 
 from app.core.observation import ScreenObservation
+from app.perception.foreground_detector import ForegroundApplicationDetector
 from app.perception.ocr import TesseractOCR
 from app.perception.perception_manager import (
     PerceptionManager,
@@ -11,8 +20,7 @@ from app.perception.screenshot import ScreenshotCapture
 
 class ComputerObserver(ABC):
     """
-    Abstract interface for observing the current
-    computer state.
+    Abstract interface for observing the current computer state.
     """
 
     @abstractmethod
@@ -22,16 +30,16 @@ class ComputerObserver(ABC):
 
 class ScreenObserver(ComputerObserver):
     """
-    Development implementation of ComputerObserver.
+    Standard implementation of ComputerObserver.
 
-    Captures the current screen and analyzes it using
-    the configured perception pipeline.
+    Captures the current screen and analyzes it using the unified perception pipeline.
     """
 
     def __init__(
         self,
         screenshot_capture: ScreenshotCapture | None = None,
         perception_manager: PerceptionManager | None = None,
+        foreground_detector: ForegroundApplicationDetector | None = None,
     ):
         self.screenshot_capture = (
             screenshot_capture
@@ -45,31 +53,29 @@ class ScreenObserver(ComputerObserver):
             )
         )
 
+        self.foreground_detector = (
+            foreground_detector
+            or ForegroundApplicationDetector()
+        )
+
     def observe(self) -> ScreenObservation:
         """
         Capture and analyze the current screen.
-
-        Populates timestamp, processes, and window_title in addition
-        to the existing screen_text, elements, and screenshot fields.
         """
+        fg_ctx = self.foreground_detector.get_foreground_context()
+        window_title = fg_ctx.window_title if fg_ctx else None
+        foreground_app = fg_ctx.app_name if fg_ctx else None
 
-        screenshot = (
-            self.screenshot_capture.capture()
+        screenshot = self.screenshot_capture.capture()
+
+        perception = self.perception_manager.analyze(
+            screenshot,
+            foreground_app=foreground_app,
+            window_title=window_title,
         )
 
-        perception = (
-            self.perception_manager.analyze(
-                screenshot
-            )
-        )
-
-        screen_text = self._extract_screen_text(
-            perception
-        )
-
+        screen_text = self._extract_screen_text(perception)
         processes = self._get_running_processes()
-        window_title = self._get_foreground_window()
-        foreground_app = self._get_foreground_process()
 
         dimensions = getattr(screenshot, "size", None) if screenshot is not None else None
         if isinstance(dimensions, tuple) and len(dimensions) == 2:
@@ -81,119 +87,69 @@ class ScreenObserver(ComputerObserver):
 
         return ScreenObservation(
             screen_text=screen_text,
-            elements=list(
-                perception.elements
-            ),
+            elements=list(perception.elements),
             screenshot=screenshot,
             timestamp=time.time(),
             processes=processes,
             window_title=window_title,
             foreground_app=foreground_app,
+            foreground_context=fg_ctx,
+            ui_graph=perception.ui_graph,
+            perception_confidence=perception.overall_confidence,
+            sources_used=list(perception.sources_used),
             screen_dimensions=screen_dimensions,
             screen_signature=screen_sig,
             metadata={
-                "sources_used": (
-                    perception.sources_used
-                ),
-                "screen_description": (
-                    perception.screen_description
-                ),
+                "sources_used": perception.sources_used,
+                "screen_description": perception.screen_description,
+                "metadata": perception.metadata,
             },
         )
 
     @staticmethod
-    def _extract_screen_text(
-        perception,
-    ) -> str:
-        """
-        Combine readable text from perceived UI elements.
-        """
-
+    def _extract_screen_text(perception) -> str:
         texts = []
-
         for element in perception.elements:
             if element.text:
-                texts.append(
-                    element.text.strip()
-                )
-
-        return "\n".join(
-            text
-            for text in texts
-            if text
-        )
+                texts.append(element.text.strip())
+        return "\n".join(text for text in texts if text)
 
     @staticmethod
     def _get_running_processes() -> list[str]:
-        """
-        Return a list of running process names.
-
-        Falls back gracefully when psutil is unavailable.
-        """
-
         try:
             import psutil
-
             return [
                 proc.name().lower()
                 for proc in psutil.process_iter(["name"])
                 if proc.info.get("name")
             ]
-
         except Exception:
             return []
 
     @staticmethod
     def _get_foreground_window() -> str | None:
-        """
-        Return the foreground window title on Windows.
-
-        Falls back gracefully when pygetwindow or ctypes are unavailable.
-        """
-
         try:
             import ctypes
-
-            GetForegroundWindow = ctypes.windll.user32.GetForegroundWindow
-            GetWindowTextW = ctypes.windll.user32.GetWindowTextW
-            GetWindowTextLengthW = (
-                ctypes.windll.user32.GetWindowTextLengthW
-            )
-
-            hwnd = GetForegroundWindow()
-            length = GetWindowTextLengthW(hwnd)
-
-            if length == 0:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if not hwnd:
                 return None
-
-            buf = ctypes.create_unicode_buffer(length + 1)
-            GetWindowTextW(hwnd, buf, length + 1)
-            return buf.value or None
-
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            buff = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buff, length + 1)
+            return buff.value
         except Exception:
             return None
 
     @staticmethod
     def _get_foreground_process() -> str | None:
-        """
-        Return the process name of the foreground window on Windows.
-        """
         try:
             import ctypes
             import psutil
-
             hwnd = ctypes.windll.user32.GetForegroundWindow()
             if not hwnd:
                 return None
-
             pid = ctypes.c_ulong()
-            ctypes.windll.user32.GetWindowThreadProcessId(
-                hwnd, ctypes.byref(pid)
-            )
-
-            if pid.value:
-                return psutil.Process(pid.value).name().lower()
-
-            return None
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            return psutil.Process(pid.value).name().lower()
         except Exception:
-            return None
+            return None

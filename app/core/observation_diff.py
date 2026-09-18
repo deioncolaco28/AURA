@@ -81,6 +81,8 @@ class ObservationDiff:
     processes_stopped: list[str] = field(default_factory=list)
 
     window_title_changed: bool = False
+    foreground_app_changed: bool = False
+    url_changed: bool = False
 
     target_appeared: bool = False
     target_disappeared: bool = False
@@ -100,12 +102,19 @@ class ObservationDiff:
             or self.processes_started
             or self.processes_stopped
             or self.window_title_changed
+            or self.foreground_app_changed
+            or self.url_changed
             or self.target_appeared
             or self.target_disappeared
         )
 
     @property
     def screen_changed(self) -> bool:
+        """Alias for any_change."""
+        return self.any_change
+
+    @property
+    def has_meaningful_change(self) -> bool:
         """Alias for any_change."""
         return self.any_change
 
@@ -222,11 +231,20 @@ class ObservationDiffer:
         )
 
         # ----------------------------------------------------------
-        # Window title
+        # Window title & Foreground App & URL
         # ----------------------------------------------------------
         diff.window_title_changed = self._title_changed(
             before, after
         )
+        before_fg_ctx = getattr(before, "foreground_context", None)
+        after_fg_ctx = getattr(after, "foreground_context", None)
+        before_fg = str(getattr(before, "foreground_app", "") or (before_fg_ctx.app_name if before_fg_ctx else "") or "").strip().lower()
+        after_fg = str(getattr(after, "foreground_app", "") or (after_fg_ctx.app_name if after_fg_ctx else "") or "").strip().lower()
+        diff.foreground_app_changed = bool(before_fg and after_fg and before_fg != after_fg)
+
+        before_url = str(getattr(before, "url", "") or "").strip().lower()
+        after_url = str(getattr(after, "url", "") or "").strip().lower()
+        diff.url_changed = bool(before_url and after_url and before_url != after_url)
 
         # ----------------------------------------------------------
         # Target appearance / disappearance
@@ -431,3 +449,12 @@ class ObservationDiffer:
         disappeared = in_before and not in_after
 
         return appeared, disappeared
+
+
+def diff_observations(
+    before,
+    after,
+    target: str | None = None,
+) -> ObservationDiff:
+    """Convenience helper to diff two ScreenObservation instances."""
+    return ObservationDiffer().compare(before, after, target=target)

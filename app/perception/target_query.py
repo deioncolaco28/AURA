@@ -3,31 +3,15 @@ app/perception/target_query.py
 
 Structured representation of a user's target request.
 
-A TargetQuery captures the *intent* behind a target reference so
+A TargetQuery captures the intent behind a target reference so
 that the spatial reasoner and target ranker can resolve it against
 actual perceived UI elements without application-specific hard-coding.
-
-Examples
---------
-"second search result"
-    TargetQuery(group="search_result", ordinal=2)
-
-"last option"
-    TargetQuery(group="option", ordinal=-1)
-
-"option below Calculator"
-    TargetQuery(group="option", relation="below", reference="Calculator")
-
-"button to the right of Search"
-    TargetQuery(element_type="button", relation="right", reference="Search")
-
-"Notepad"
-    TargetQuery(text="Notepad")
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Ordinal constants
@@ -36,7 +20,6 @@ from typing import Any
 ORDINAL_FIRST = 1
 ORDINAL_LAST = -1         # last element
 ORDINAL_SECOND_LAST = -2  # second from last
-
 
 # ---------------------------------------------------------------------------
 # Relation constants
@@ -48,6 +31,9 @@ RELATION_LEFT = "left"
 RELATION_RIGHT = "right"
 RELATION_NEAREST = "nearest"
 RELATION_BESIDE = "beside"
+RELATION_BETWEEN = "between"
+RELATION_INSIDE = "inside"
+RELATION_CONTAINS = "contains"
 
 
 # ---------------------------------------------------------------------------
@@ -59,44 +45,20 @@ RELATION_BESIDE = "beside"
 class TargetQuery:
     """
     Structured query representing what UI element the user means.
-
-    Fields
-    ------
-    text : str | None
-        Literal text label to match (e.g. "Notepad", "Search").
-
-    element_type : str | None
-        Element type filter (e.g. "button", "input", "list_item").
-
-    ordinal : int | None
-        1-based ordinal for positive values (1 = first, 2 = second).
-        Negative values count from the end (-1 = last, -2 = second-last).
-
-    relation : str | None
-        Spatial relation to a reference element.
-        One of: "above", "below", "left", "right", "nearest", "beside".
-
-    reference : str | None
-        Text label of the reference element for relational queries.
-
-    group : str | None
-        Semantic group of candidate elements
-        (e.g. "search_result", "menu_option", "button").
-
-    region : str | None
-        Screen region hint: "top", "bottom", "left", "right", "center".
-
-    metadata : dict
-        Arbitrary extra context for extensibility.
     """
 
     text: str | None = None
     element_type: str | None = None
+    description: str | None = None
     ordinal: int | None = None
+    ordinal_axis: str | None = None          # "horizontal", "vertical", "reading_order"
+    ordinal_direction: str | None = None     # "left_to_right", "right_to_left", "top_to_bottom", "bottom_to_top"
     relation: str | None = None
     reference: str | None = None
     group: str | None = None
     region: str | None = None
+    application_context: str | None = None
+    minimum_confidence: float = 0.50
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
@@ -137,13 +99,8 @@ class TargetQuery:
             and self.ordinal < 0
         )
 
-    # ------------------------------------------------------------------
-    # Human-readable summary
-    # ------------------------------------------------------------------
-
     def describe(self) -> str:
         """Return a human-readable description of the query."""
-
         parts: list[str] = []
 
         if self.ordinal is not None:
@@ -165,6 +122,10 @@ class TargetQuery:
                         f"{self.ordinal}th",
                     )
                 )
+            if self.ordinal_direction == "left_to_right":
+                parts.append("from the left")
+            elif self.ordinal_direction == "top_to_bottom":
+                parts.append("from the top")
 
         if self.element_type:
             parts.append(self.element_type)
@@ -176,9 +137,7 @@ class TargetQuery:
             parts.append(f'"{self.text}"')
 
         if self.relation and self.reference:
-            parts.append(
-                f"{self.relation} {self.reference}"
-            )
+            parts.append(f"{self.relation} {self.reference}")
 
         if self.region:
             parts.append(f"in {self.region}")
@@ -189,29 +148,8 @@ class TargetQuery:
         return " ".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# Simple parser for natural-language ordinal phrases
-# ---------------------------------------------------------------------------
-
-
 def parse_ordinal(text: str) -> int | None:
-    """
-    Parse a natural-language ordinal string into an integer.
-
-    Returns None when the string is not a recognised ordinal.
-
-    Examples
-    --------
-    >>> parse_ordinal("first")
-    1
-    >>> parse_ordinal("last")
-    -1
-    >>> parse_ordinal("second-last")
-    -2
-    >>> parse_ordinal("3rd")
-    3
-    """
-
+    """Parse a natural-language ordinal string into an integer."""
     text = text.strip().lower()
 
     _word_map: dict[str, int] = {
@@ -235,7 +173,6 @@ def parse_ordinal(text: str) -> int | None:
     if text in _word_map:
         return _word_map[text]
 
-    # Numeric ordinals: "2nd", "3rd", "4th", ...
     for suffix in ("st", "nd", "rd", "th"):
         if text.endswith(suffix):
             numeric_part = text[: -len(suffix)]
@@ -244,7 +181,6 @@ def parse_ordinal(text: str) -> int | None:
             except ValueError:
                 pass
 
-    # Plain integer
     try:
         return int(text)
     except ValueError:
@@ -254,25 +190,19 @@ def parse_ordinal(text: str) -> int | None:
 def parse_target_query(phrase: str) -> TargetQuery:
     """
     Parse a natural language target phrase or instruction into a structured TargetQuery.
-
-    Supports:
-        - Ordinals: "second search result", "last option", "third item", "first result", "second-last option"
-        - Directional: "option below Calculator", "item above Notepad", "button to the right of Search"
-        - Proximity: "nearest result", "item next to Calculator", "option beside Calculator"
-        - Plain text: "Notepad", "Calculator"
     """
     if not phrase or not phrase.strip():
         return TargetQuery()
 
     cleaned = phrase.strip()
 
-    # Remove conversational command prefixes like "click the", "click", "select", etc.
     prefixes_to_strip = [
         "click on the ", "click the ", "click ",
         "select the ", "select ",
         "choose the ", "choose ",
         "press the ", "press ",
         "tap the ", "tap ",
+        "open the ", "open ",
         "the ",
     ]
     cleaned_lower = cleaned.lower()
@@ -282,8 +212,45 @@ def parse_target_query(phrase: str) -> TargetQuery:
             cleaned_lower = cleaned.lower()
             break
 
-    # 1. Check for spatial relationships (relational queries)
-    # Patterns: "<type> below/above/left of/right of/next to/beside/near <reference>"
+    # 1. Check for directional ordinals: e.g. "second button from the left", "first item from top"
+    for dir_pattern, axis, direction in [
+        (" from the left", "horizontal", "left_to_right"),
+        (" from left", "horizontal", "left_to_right"),
+        (" from the right", "horizontal", "right_to_left"),
+        (" from right", "horizontal", "right_to_left"),
+        (" from the top", "vertical", "top_to_bottom"),
+        (" from top", "vertical", "top_to_bottom"),
+        (" from the bottom", "vertical", "bottom_to_top"),
+        (" from bottom", "vertical", "bottom_to_top"),
+    ]:
+        if dir_pattern in cleaned_lower:
+            prefix_part = cleaned_lower.split(dir_pattern)[0].strip()
+            words = prefix_part.split()
+            if words:
+                ord_val = parse_ordinal(words[0])
+                if ord_val is not None:
+                    elem_type = " ".join(words[1:]).strip() if len(words) > 1 else None
+                    return TargetQuery(
+                        element_type=elem_type or "button",
+                        ordinal=ord_val,
+                        ordinal_axis=axis,
+                        ordinal_direction=direction,
+                    )
+
+    # 2. Check for "between X and Y"
+    if " between " in cleaned_lower and " and " in cleaned_lower:
+        prefix_part, rest = cleaned_lower.split(" between ", 1)
+        if " and " in rest:
+            ref_a, ref_b = rest.split(" and ", 1)
+            elem_type = prefix_part.strip() or None
+            return TargetQuery(
+                element_type=elem_type,
+                relation=RELATION_BETWEEN,
+                reference=ref_a.strip().strip("\"'.,"),
+                metadata={"reference_b": ref_b.strip().strip("\"'.,")},
+            )
+
+    # 3. Check for other spatial relationships (relational queries)
     relational_markers = [
         (" to the right of ", RELATION_RIGHT),
         (" to the left of ", RELATION_LEFT),
@@ -296,6 +263,8 @@ def parse_target_query(phrase: str) -> TargetQuery:
         (" above ", RELATION_ABOVE),
         (" next to ", RELATION_BESIDE),
         (" beside ", RELATION_BESIDE),
+        (" inside ", RELATION_INSIDE),
+        (" contains ", RELATION_CONTAINS),
         (" near ", RELATION_NEAREST),
         (" nearest ", RELATION_NEAREST),
         (" closest to ", RELATION_NEAREST),
@@ -308,43 +277,56 @@ def parse_target_query(phrase: str) -> TargetQuery:
             ref_idx = cleaned_lower.find(marker) + len(marker)
             reference = cleaned[ref_idx:].strip().strip("\"'.,")
 
-            # Extract any element_type or group from prefix
+            # Check if there is also an ordinal in target_type, e.g. "first item under Downloads"
+            ord_val = None
+            type_words = target_type.split()
+            if type_words:
+                ord_val = parse_ordinal(type_words[0])
+                if ord_val is not None:
+                    target_type = " ".join(type_words[1:]).strip()
+
             element_type = None
             group = None
-            if target_type in ("button", "input", "icon", "link", "field"):
+            if target_type in ("button", "input", "icon", "link", "field", "checkbox", "tab"):
                 element_type = target_type
-            elif target_type in ("option", "search result", "result", "item"):
+            elif target_type in ("option", "search result", "result", "item", "file"):
                 group = target_type
+            elif target_type:
+                element_type = target_type
 
             return TargetQuery(
                 element_type=element_type,
                 group=group,
+                ordinal=ord_val,
                 relation=relation,
                 reference=reference,
             )
 
-    # 2. Check for ordinal queries ("second search result", "last option", "third item")
+    # 4. Check for ordinal queries ("second search result", "last option", "third item")
     words = cleaned.split()
     if words:
         first_word = words[0].lower()
         ordinal = parse_ordinal(first_word)
         if ordinal is not None and len(words) > 1:
             rest = " ".join(words[1:]).strip().strip("\"'.,")
+            elem_type = rest if rest in ("button", "input", "link", "checkbox", "tab") else None
             return TargetQuery(
                 ordinal=ordinal,
-                group=rest,
+                element_type=elem_type,
+                group=rest if not elem_type else None,
             )
 
-        # Multi-word ordinals: "second last option", "second-last option"
         if len(words) >= 3:
             first_two = f"{words[0]} {words[1]}".lower()
             ordinal = parse_ordinal(first_two)
             if ordinal is not None:
                 rest = " ".join(words[2:]).strip().strip("\"'.,")
+                elem_type = rest if rest in ("button", "input", "link", "checkbox", "tab") else None
                 return TargetQuery(
                     ordinal=ordinal,
-                    group=rest,
+                    element_type=elem_type,
+                    group=rest if not elem_type else None,
                 )
 
-    # 3. Simple text query
+    # 5. Simple text query
     return TargetQuery(text=cleaned.strip("\"'.,"))
